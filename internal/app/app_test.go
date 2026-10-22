@@ -443,6 +443,54 @@ func TestNoteSavesWithActiveProject(t *testing.T) {
 	}
 }
 
+func TestActiveProjectCreatesOnSubmit(t *testing.T) {
+	h := newHarness(t)
+	h.keys("P", "new-project")
+	if p, _ := h.st.ProjectByName(context.Background(), "new-project"); p != nil {
+		t.Fatal("editing created a project before submission")
+	}
+	h.keys("ctrl+s")
+	p, err := h.st.ProjectByName(context.Background(), "new-project")
+	if err != nil || p == nil || h.a.active != "new-project" || !h.a.modals.Empty() {
+		t.Fatalf("submit: project=%+v err=%v active=%q status=%q", p, err, h.a.active, h.a.status)
+	}
+	h.keys("P", "new-project", "ctrl+s")
+	again, err := h.st.ProjectByName(context.Background(), "new-project")
+	if err != nil || again == nil || again.ID != p.ID || !h.a.modals.Empty() {
+		t.Fatalf("existing project was not reused: %+v, %v", again, err)
+	}
+	h.keys("P", "no-project", "ctrl+s")
+	if h.a.active != "" || !h.a.activeNone || !h.a.modals.Empty() {
+		t.Fatalf("no-project did not clear active context: %q", h.a.status)
+	}
+}
+
+func TestActiveProjectCancelDoesNotCreate(t *testing.T) {
+	h := newHarness(t)
+	h.keys("P", "discarded-project", "esc", "esc", "y")
+	if p, _ := h.st.ProjectByName(context.Background(), "discarded-project"); p != nil {
+		t.Fatal("cancel created a project")
+	}
+	if h.a.active != "" || !h.a.modals.Empty() {
+		t.Fatalf("cancel changed context or left form open: %q", h.a.status)
+	}
+}
+
+func TestActiveProjectSaveFailureKeepsContextAndDraft(t *testing.T) {
+	h := newHarness(t)
+	h.a.setActive("previous")
+	h.keys("P", "unsaved-project")
+	if err := h.st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h.keys("ctrl+s")
+	top, _ := h.a.modals.Top()
+	f, ok := formOf(top)
+	if !ok || f.Text("project") != "unsaved-project" || h.a.active != "previous" {
+		t.Fatalf("save failure lost draft or changed context: %q", h.a.status)
+	}
+}
+
 func TestPathPickerRoundTrip(t *testing.T) {
 	h := newHarness(t)
 	h.keys("N", "t")
@@ -462,5 +510,59 @@ func TestPathPickerRoundTrip(t *testing.T) {
 	}
 	if f.Text("directory") != dir {
 		t.Fatalf("directory = %q", f.Text("directory"))
+	}
+}
+
+func TestPanesFollowActiveProject(t *testing.T) {
+	h := newHarness(t, [3]string{"web", "w1", "web-pane"}, [3]string{"other", "w2", "other-pane"}, [3]string{domain.SessionNoProject, "w3", "unowned-pane"})
+	check := func(project, window string) {
+		t.Helper()
+		h.a.setActive(project)
+		h.a.refreshPages() // Inventory/store refresh must retain the scope.
+		items := h.a.panes().lst.Items()
+		if len(items) != 1 || items[0].(row).win.Target.WindowID != window {
+			t.Fatalf("project %q: panes = %+v", project, items)
+		}
+		if selected, ok := h.a.selectedWindow(); !ok || selected.Target.WindowID != window {
+			t.Fatalf("project %q retained an out-of-scope selection", project)
+		}
+		if !strings.Contains(h.a.View(), windowName(*items[0].(row).win)) {
+			t.Fatal("scoped pane missing from rendered screen")
+		}
+	}
+	check("web", "w1")
+	check("other", "w2")
+	check("", "w3")
+	h.a.setActive("empty-project")
+	if len(h.a.panes().lst.Items()) != 0 {
+		t.Fatal("empty project leaked panes from another project")
+	}
+	if _, ok := h.a.selectedWindow(); ok {
+		t.Fatal("empty project retained a selected pane")
+	}
+}
+
+func TestCreationUsesPinnedProject(t *testing.T) {
+	h := newHarness(t, [3]string{"other", "w1", "other-pane"})
+	h.a.setActive("pinned")
+	h.keys("n", "t")
+	requests := h.requests("new-window")
+	if len(requests) != 1 || !strings.Contains(requests[0], `"session":"pinned"`) {
+		t.Fatalf("empty pinned project launched elsewhere: %v", requests)
+	}
+	// A selected row on another page must not override the pinned project.
+	h.keys("2")
+	r := row{project: "other", isProj: true}
+	h.run(h.a.openCreateForm(domain.KindTerminal, r, true))
+	top, _ := h.a.modals.Top()
+	f, ok := formOf(top)
+	if !ok || f.Text("project") != "pinned" {
+		t.Fatal("create form did not default to pinned project")
+	}
+	h.keys("esc")
+	h.keys("n", "t")
+	requests = h.requests("new-window")
+	if len(requests) != 2 || !strings.Contains(requests[1], `"session":"pinned"`) {
+		t.Fatalf("selected session overrode pinned project: %v", requests)
 	}
 }

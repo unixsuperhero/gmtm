@@ -46,7 +46,8 @@ func (p PathSpec) Local() bool { return p.Host == "" || p.Host == "local" }
 // tea.Cmd; its reply is bound to the field ID and edit generation.
 type Completer func(ctx context.Context, query string) ([]Option, error)
 
-// Field declares one form field. IDs are stable and unique within a form.
+// Field declares one form field. IDs are stable; the form assigns short unique
+// lowercase selection codes displayed beside each field.
 type Field struct {
 	ID       string
 	Label    string
@@ -64,8 +65,6 @@ type Field struct {
 	// ParentID names the parent field of a Linked child.
 	ParentID string
 	Path     PathSpec
-	// Shortcut focuses this field from normal mode; must not be a navigation key.
-	Shortcut rune
 	Complete Completer
 	Validate func(v any) error
 }

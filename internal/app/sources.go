@@ -20,8 +20,8 @@ import (
 
 // ctxSource is the Jump / Context / meta-mode source for one originating
 // window (possibly none). It never invents associations: saved items come
-// from SQLite, files from the daemon's file-list verb, the outline from
-// agent-activity or a read-only capture.
+// from SQLite, files from the daemon's file-list verb, and the outline from
+// attributable captured command/output and prompt/response records.
 type ctxSource struct {
 	mode    string // jump | context | meta
 	client  tuios.Client
@@ -183,6 +183,9 @@ func firstList(m map[string]any) []any {
 func (s *ctxSource) Preview(_ context.Context, it twopane.Item) (string, error) {
 	switch d := it.Data.(type) {
 	case string:
+		if s.outNote != "" {
+			return s.outNote + "\n\n" + d, nil
+		}
 		return d, nil
 	case itemRef:
 		return itemText(d.it), nil
@@ -238,44 +241,16 @@ func (a *App) openTwopane(mode string) tea.Cmd {
 		cp := *w
 		src.win, src.project = &cp, w.Project
 	}
-	c := a.d.Client
+	repo, history := a.d.Capture, a.d.History
 	return func() tea.Msg {
 		if src.win == nil {
 			return twopaneMsg{mode, src}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		t := src.win.Target
-		if src.win.Kind == domain.KindAgent {
-			act, err := tuios.AgentActivity(ctx, c, t.Session, t.WindowID, 100, false)
-			if err == nil && len(act.Entries) > 0 {
-				for i, e := range act.Entries {
-					full := []string{}
-					for k, v := range e {
-						full = append(full, fmt.Sprintf("%s: %v", k, v))
-					}
-					sort.Strings(full)
-					src.outline = append(src.outline, twopane.Item{ID: fmt.Sprint(i), Title: entryTitle(e), Kind: firstStr(e, "kind", "type", "event"), Data: sanitizeLine(strings.Join(full, "\n"))})
-				}
-				return twopaneMsg{mode, src}
-			}
-			if err != nil {
-				src.outNote = "agent activity unavailable: " + err.Error() + "; showing captured lines"
-			}
-		}
-		text, err := tuios.CapturePane(ctx, c, t.Session, t.WindowID, "recent", 200, false)
-		if err != nil {
-			src.outNote = "capture unavailable: " + err.Error()
-			return twopaneMsg{mode, src}
-		}
-		lines := strings.Split(sanitizeLine(text), "\n")
-		for i, l := range lines {
-			if strings.TrimSpace(l) == "" {
-				continue
-			}
-			lo, hi := max(0, i-10), min(len(lines), i+11)
-			src.outline = append(src.outline, twopane.Item{ID: fmt.Sprint(i), Title: strings.TrimSpace(l), Kind: "line", Data: strings.Join(lines[lo:hi], "\n")})
-		}
+		turns, note := loadCapturedTurns(ctx, repo, history, *src.win)
+		src.outline = capturedOutline(turns)
+		src.outNote = note
 		return twopaneMsg{mode, src}
 	}
 }

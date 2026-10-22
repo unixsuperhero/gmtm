@@ -93,6 +93,7 @@ type Session struct {
 }
 
 // Start opens a stream-pane on target holding a cols×rows lease.
+// ctx bounds startup only; Stop owns cancellation after a successful start.
 func Start(ctx context.Context, client tuios.Client, target domain.Target, cols, rows int, opts ...Option) (*Session, error) {
 	c, r := clampU16(cols), clampU16(rows)
 	if c == 0 || r == 0 {
@@ -107,12 +108,19 @@ func Start(ctx context.Context, client tuios.Client, target domain.Target, cols,
 	for _, o := range opts {
 		o(s)
 	}
-	st, err := client.StreamPane(ctx, target.Session, target.WindowID, c, r)
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	stopStartupCancel := context.AfterFunc(ctx, s.cancel)
+	st, err := client.StreamPane(s.ctx, target.Session, target.WindowID, c, r)
+	stopped := stopStartupCancel()
+	if err == nil && (!stopped || ctx.Err() != nil) {
+		_ = st.Close()
+		err = ctx.Err()
+	}
 	if err != nil {
+		s.cancel()
 		return nil, err
 	}
 	s.stream = st
-	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.setEmu(int(c), int(r))
 	go s.writer()
 	go s.renewer()

@@ -28,5 +28,7 @@ Spec: `~/hub/prompts/clean-mtm.md`. UI identity: **cmtm**. Binary: `mtm`. Server
 ## Modes
 normal | insert | live | jump | context | palette | help | note. Key routing: F4 (New note) is reserved before any mode routing. Live leader default Ctrl+a.
 
+Live startup uses the orchestrator's five-second timeout only while opening the stream. After startup, the live session owns cancellation; returning from the startup command must not close the stream. `Ctrl+A`, then `d` detaches, releasing the size lease before closing the connection.
+
 ## Build/verify
 `scripts/remote.sh <ws> [secs] -- go build ./... && go test ./...` runs on vps2 in an isolated workspace. Acceptance tests use throwaway servers named `cmt-<8hex>` (14-char limit; see docs/tuios-protocol-notes.md).

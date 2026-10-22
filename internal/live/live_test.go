@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/unixsuperhero/gmtm/internal/domain"
 	"github.com/unixsuperhero/gmtm/internal/tuios"
+	"github.com/unixsuperhero/gmtm/internal/tuios/tuiostest"
 )
 
 type log struct {
@@ -98,6 +100,65 @@ func msgOf(t *testing.T, cmd tea.Cmd) tea.Msg {
 		t.Fatal("nil cmd")
 	}
 	return cmd()
+}
+
+func TestStartupCancellationDoesNotEndLiveSession(t *testing.T) {
+	d := tuiostest.Start(t)
+	released := make(chan bool, 1)
+	d.OnStream(func(_ json.RawMessage, sc *tuiostest.StreamConn) {
+		for {
+			typ, payload, err := sc.ReadFrame()
+			if err != nil {
+				return
+			}
+			switch typ {
+			case 'I':
+				_ = sc.Output(1, payload)
+			case 'L':
+				if string(payload) == "\x00\x00\x00\x00" {
+					released <- true
+					return
+				}
+			}
+		}
+	})
+	c, err := tuios.NewWithOptions("clean-mtm", tuios.Options{SocketPath: d.Path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := Start(ctx, c, target("w1"), 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	cancel() // The orchestrator's startup command has returned.
+	_, cmd := s.HandleKey(runes("still live"))
+	if cmd != nil {
+		cmd()
+	}
+	select {
+	case f, ok := <-s.stream.Frames():
+		if !ok || f.Type != 'O' || string(f.Data) != "still live" {
+			t.Fatalf("live input/output lost after startup: %+v, open=%v", f, ok)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("live input was not echoed")
+	}
+	s.HandleKey(ctrlA)
+	_, cmd = s.HandleKey(runes("d"))
+	if _, ok := msgOf(t, cmd).(DetachMsg); !ok {
+		t.Fatal("Ctrl+A d did not request detach")
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-released:
+	case <-time.After(3 * time.Second):
+		t.Fatal("detach did not release the lease")
+	}
 }
 
 func TestLeaderStateMachine(t *testing.T) {

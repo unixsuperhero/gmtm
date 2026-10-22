@@ -19,11 +19,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/unixsuperhero/gmtm/internal/actions"
+	"github.com/unixsuperhero/gmtm/internal/capture"
 	"github.com/unixsuperhero/gmtm/internal/domain"
 	"github.com/unixsuperhero/gmtm/internal/inventory"
 	"github.com/unixsuperhero/gmtm/internal/launch"
 	"github.com/unixsuperhero/gmtm/internal/live"
 	"github.com/unixsuperhero/gmtm/internal/preview"
+	"github.com/unixsuperhero/gmtm/internal/setup"
 	"github.com/unixsuperhero/gmtm/internal/store"
 	"github.com/unixsuperhero/gmtm/internal/tuios"
 	"github.com/unixsuperhero/gmtm/internal/ui/forms"
@@ -41,6 +43,9 @@ type Deps struct {
 	Store    store.Store
 	Launch   *launch.Service
 	Registry *actions.Registry
+	Capture  *capture.Repository
+	History  *capture.Service
+	Setup    *setup.Manager
 	// Project is the explicit active project ("" = none chosen).
 	Project string
 	// WaitUpdates subscribes to inventory Updates() (off in unit tests).
@@ -78,15 +83,20 @@ type App struct {
 	live         *live.Session
 	liveStarting bool
 
-	prev      *preview.Service
-	tracker   *preview.Tracker
-	cache     *preview.Cache
-	shot      *preview.ResultMsg
-	inFlight  bool
-	lastShot  time.Time
-	actGen    uint64
-	actTarget string
-	activity  string
+	prev            *preview.Service
+	tracker         *preview.Tracker
+	cache           *preview.Cache
+	shot            *preview.ResultMsg
+	inFlight        bool
+	lastShot        time.Time
+	actGen          uint64
+	actTarget       string
+	activity        string
+	historyGen      uint64
+	historyTarget   string
+	historyText     string
+	historyInFlight bool
+	historyRead     time.Time
 
 	twoSrc     twopane.Source
 	saveSource *domain.Target
@@ -128,9 +138,10 @@ type (
 		target domain.Target
 	}
 	txDoneMsg struct {
-		err   error
-		ok    string
-		layer string
+		err           error
+		ok            string
+		layer         string
+		activeProject *string
 	}
 	noteSavedMsg struct{ err error }
 	liveStartMsg struct {
@@ -428,6 +439,16 @@ func (a *App) update(msg tea.Msg) tea.Cmd {
 			a.activity = m.text
 		}
 		return nil
+	case capturedHistoryMsg:
+		if m.gen != a.historyGen || m.target != a.historyTarget {
+			return nil
+		}
+		a.historyText, a.historyInFlight, a.historyRead = m.text, false, time.Now()
+		return tea.Tick(time.Second, func(time.Time) tea.Msg { return historyTickMsg{} })
+	case historyTickMsg:
+		return nil
+	case setupStatusMsg:
+		return a.onSetupStatus(m)
 	case contentMsg:
 		a.content = &contentView{title: m.title, text: m.text}
 		return nil
@@ -466,7 +487,7 @@ func (a *App) onInventory() {
 
 func (a *App) refreshPages() {
 	for _, p := range a.pages {
-		p.refresh(a.snap, a.data)
+		p.refresh(a.snap, a.data, a.active, a.active != "" || a.activeNone)
 	}
 }
 
@@ -554,6 +575,8 @@ func (a *App) syncDetail() tea.Cmd {
 	}
 	p := a.panes()
 	switch paneTabs[p.tab] {
+	case "Transcript", "Turns":
+		return a.syncCapturedDetail(*w)
 	case "Screen":
 		cur, _ := a.tracker.Current()
 		stale := cur.Key() != w.Target.Key() || (!a.inFlight && time.Since(a.lastShot) > 2*time.Second)
@@ -725,6 +748,9 @@ func (a *App) emptyInventory() string {
 	case domain.ConnConnecting, domain.ConnResynchronizing, domain.ConnUnknown, "":
 		return "Connecting to " + a.d.Client.Server() + "… (loading)"
 	}
+	if a.cur == 0 && (a.active != "" || a.activeNone) {
+		return "No panes in project " + a.projectText() + ". Create one: n t terminal · n a agent · n v vim (N for forms)."
+	}
 	return "No windows on " + a.d.Client.Server() + ". Create one: n t terminal · n a agent · n v vim (N for forms)."
 }
 
@@ -763,8 +789,13 @@ func (a *App) paneDetail(w, h int) string {
 		return head + "\n" + hdr + "\n" + strings.Join(preview.Crop(lines, w, bh-1), "\n")
 	case "Activity":
 		return head + "\n" + a.activity
+	case "Transcript", "Turns":
+		if a.historyTarget != win.Target.Key() {
+			return head + "\nloading captured history…"
+		}
+		return head + "\n" + a.historyText
 	}
-	return head + "\nunavailable: " + strings.ToLower(paneTabs[p.tab]) + " needs a human nonce (attach-presence) and is unsupported in mtm"
+	return head
 }
 
 func (a *App) contextDetail(w, h int) string {

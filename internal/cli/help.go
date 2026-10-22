@@ -15,6 +15,8 @@ var topics = map[string]topic{
 	"version": {"version", "Print the version", ""},
 	"server":  {"server", "Show the selected server, its socket and whether it answers", "Use --json for machine-readable output."},
 	"actions": {"actions", "List every registered action and its keys", "Use --json for machine-readable output."},
+	"setup": {"setup [install|status|uninstall|edit] [options]", "Install or inspect server-scoped shell and OMP capture", "With no action, installs. Options: --home DIR isolates all setup files (also\nGMTM_SETUP_HOME); --binary PATH pins the executable embedded in hooks.\nUse global --server NAME and --db PATH before setup. Setup prints every managed\npath and never overwrites existing or modified user files. Shell source lines\nare added to .bashrc and .zshrc and removed by uninstall; unrelated text survives.\nOpen new shell panes and restart OMP after install/uninstall. Bash requires 4.4+;\nzsh is supported. Fish/other shells have no installed persistence hook.\nOnly OMP agent capture is supported; other harnesses are not silently enabled.\nsetup edit [omp|bash|zsh] opens an installed owned file using $VISUAL, then $EDITOR,\nthen vi. Defaults to omp. Use --json for install/status/uninstall output."},
+	"capture": {"capture record | capture sync --session NAME --window ID", "Persist attributed turn JSON or completed terminal commands", "record reads exactly one Turn JSON object from stdin and upserts it in --db.\nIts server must equal the selected --server. Required attribution: id, server,\nhost, session, window, kind; agent turns also need harness and conversation_id.\nstarted_at/completed_at are Unix milliseconds; state is working, done, errored,\nor interrupted. Working records have completed_at=0. prompt/response retain\nfull text. No pane environment defaults are used for attribution.\nsync reads structured command history and marked output from the named TUIOS\nserver. It requires --session and --window; --host defaults to local. Managed\nshell hooks call it after every command, even when the TUI is closed.\n--command TEXT supplies the shell's command as raw_command, distinct from the\ndaemon's reconstructed cmdline (which may contain wrapping artifacts). Zsh uses\nnative preexec text; bash supplies a newly added history entry only, never a\nprevious command when history is disabled or the command was ignored.\nUse global --server NAME, --db PATH and --json before capture."},
 }
 
 func commandNames() []string {
@@ -36,7 +38,7 @@ func helpText(bin, name string) string {
 		return sb.String()
 	}
 	fmt.Fprintf(&sb, "%s - terminal workspace manager\n\nUsage: %s [global options] [command] [args]\n\nCommands:\n", bin, bin)
-	order := []string{"tui", "json", "server", "actions", "help", "version"}
+	order := []string{"tui", "json", "server", "actions", "setup", "capture", "help", "version"}
 	w := 0
 	for _, k := range order {
 		w = max(w, len(topics[k].usage))

@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/sahilm/fuzzy"
+	"github.com/unixsuperhero/gmtm/internal/ui/readline"
 )
 
 // Mode is the Vim-like interaction mode shown in the frame.
@@ -34,6 +35,7 @@ type Model struct {
 	w, h    int
 	mode    Mode
 	input   textinput.Model
+	editor  readline.Editor
 	query   string
 	matches []*Node // pre-order
 	matchAt int     // index into matches, -1 none
@@ -298,8 +300,7 @@ func (m *Model) updateInsert(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.jumpFrom()
 		return m, nil
 	}
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
+	cmd := m.editor.Update(&m.input, msg, false)
 	m.SetQuery(m.input.Value())
 	return m, cmd
 }

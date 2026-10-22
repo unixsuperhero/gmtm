@@ -133,10 +133,13 @@ func hostOf(h string) string {
 	return h
 }
 
-func windowRows(snap domain.Snapshot) []list.Item {
+func windowRows(snap domain.Snapshot, project string, scoped bool) []list.Item {
 	out := make([]list.Item, 0, len(snap.Windows))
 	for i := range snap.Windows {
 		w := snap.Windows[i]
+		if scoped && w.Project != project {
+			continue
+		}
 		state := string(w.State)
 		if w.State == domain.StateUnknown && w.RawState != "" {
 			state = "unknown(" + w.RawState + ")"
@@ -247,7 +250,14 @@ func contextRows(d storeData) []list.Item {
 }
 
 func settingRows(d storeData) []list.Item {
-	var out []list.Item
+	out := []list.Item{
+		row{id: "capture.setup", label: "Capture setup · Enter to install terminal and agent integrations",
+			search: "capture setup install terminal command output agent prompt response",
+			fields: map[string]string{"state": "setup"}},
+		row{id: "capture.status", label: "Capture status · Enter to inspect integration files",
+			search: "capture setup status integration files",
+			fields: map[string]string{"state": "setup"}},
+	}
 	for i := range d.Settings {
 		s := d.Settings[i]
 		state := "default"

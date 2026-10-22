@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,7 +23,11 @@ func setup(t *testing.T, reply map[string]any) (*Service, *tuiostest.Daemon, sto
 	d.Handle("list-agents", tuiostest.Result(map[string]any{"agents": []any{}}))
 	d.Handle("start-agent", tuiostest.Result(reply))
 	d.Handle("queue-prompt", tuiostest.Result(map[string]any{}))
-	c, err := tuios.NewWithOptions("clean-mtm", tuios.Options{SocketPath: d.Path, Environ: func() []string { return []string{"TUIOS_SOCKET=/x", "HOME=/h"} }})
+	env := []string{"TUIOS_SOCKET=/x", "HOME=/h", "PATH=/custom/bin:/usr/bin"}
+	for i := 0; i < 100; i++ {
+		env = append(env, "CALLER_VAR_"+strconv.Itoa(i)+"=value")
+	}
+	c, err := tuios.NewWithOptions("clean-mtm", tuios.Options{SocketPath: d.Path, Environ: func() []string { return env }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +69,7 @@ func TestAgentOutcomes(t *testing.T) {
 		if !strings.Contains(p.Agent, "--model gpt-5") || !strings.Contains(p.Agent, "model_reasoning_effort=high") {
 			t.Fatalf("agent %q", p.Agent)
 		}
-		if _, leaked := p.Env["TUIOS_SOCKET"]; leaked || p.Env["TUIOS_SERVER"] != "clean-mtm" {
+		if len(p.Env) != 2 || p.Env["PATH"] != "/custom/bin:/usr/bin" || p.Env["TUIOS_SERVER"] != "clean-mtm" {
 			t.Fatalf("env %v", p.Env)
 		}
 		if tc.queue == (p.Prompt != "") {

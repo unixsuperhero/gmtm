@@ -45,7 +45,7 @@ func (a *App) exec(id, targetID string) tea.Cmd {
 	case "note.new":
 		return a.openNote()
 	case "new.terminal", "new.agent", "new.vim":
-		return a.quickCreate(domain.Kind(strings.TrimPrefix(id, "new.")), r, hasRow)
+		return a.quickCreate(domain.Kind(strings.TrimPrefix(id, "new.")))
 	case "form.terminal", "form.agent", "form.vim":
 		return a.openCreateForm(domain.Kind(strings.TrimPrefix(id, "form.")), r, hasRow)
 	case "open.live":
@@ -158,7 +158,12 @@ func (a *App) exec(id, targetID string) tea.Cmd {
 		}
 		iid := r.item.ID
 		return a.tx("project association cleared (no-project)", "", func(tx store.Tx) error { return tx.SetContextProject(iid, "") })
+	case "capture.setup", "capture.status":
+		return a.captureSetupStatus(id == "capture.setup")
 	case "setting.edit":
+		if hasRow && (r.id == "capture.setup" || r.id == "capture.status") {
+			return a.captureSetupStatus(r.id == "capture.setup")
+		}
 		if !hasRow || r.setting == nil {
 			return nil
 		}
@@ -229,6 +234,7 @@ func (a *App) setPage(i int) {
 func (a *App) setActive(project string) {
 	a.active, a.activeNone = project, project == ""
 	a.status = "active project: " + a.projectText()
+	a.refreshPages()
 }
 
 func (a *App) openHelp(mode string) tea.Cmd {
@@ -293,16 +299,12 @@ func (a *App) tx(ok, layer string, fn func(store.Tx) error) tea.Cmd {
 
 // ---- creation ----
 
-// quickCreate uses the focused row's project only; focus never selects the
-// destination window or session.
-func (a *App) quickCreate(kind domain.Kind, r row, hasRow bool) tea.Cmd {
-	spec := domain.LaunchSpec{Kind: kind, Host: domain.HostLocal}
-	if hasRow {
-		spec.Project = r.rowProject()
-	}
+// quickCreate always uses the pinned project, independent of row selection.
+func (a *App) quickCreate(kind domain.Kind) tea.Cmd {
+	spec := domain.LaunchSpec{Kind: kind, Host: domain.HostLocal, Project: a.active}
 	if kind == domain.KindAgent {
 		if spec.Harness = a.d.Launch.DefaultHarness(); spec.Harness == "" {
-			a.status = "no recognized agent harness (claude, codex, gemini) is installed"
+			a.status = "no recognized agent harness (" + strings.Join(launch.Harnesses, ", ") + ") is installed"
 			return nil
 		}
 	}

@@ -6,7 +6,6 @@ package twopane
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -17,10 +16,11 @@ import (
 
 // Item is one outline row.
 type Item struct {
-	ID    string
-	Title string
-	Kind  string // free-form: "window", "file", "doc", "mode", …; used by the kind filter
-	Depth int    // outline indentation
+	ID         string
+	Title      string
+	Kind       string // free-form: "window", "file", "doc", "mode", …; used by the kind filter
+	SearchText string // optional full searchable content, separate from the row title
+	Depth      int    // outline indentation
 	// Nested items open a new level (mode or option list) in the same modal.
 	Nested bool
 	// Unavailable, when set, is shown instead of fetching a preview.
@@ -146,19 +146,23 @@ func (m *Model) visible(l *levelState) []Item {
 	if l.query == "" {
 		return items
 	}
+	query := strings.ToLower(l.query)
 	titles := make([]string, len(items))
+	exact := make([]bool, len(items))
+	var out []Item
 	for i, it := range items {
 		titles[i] = strings.ToLower(it.Title)
+		exact[i] = strings.Contains(titles[i], query) || strings.Contains(strings.ToLower(it.SearchText), query)
+		if exact[i] {
+			out = append(out, it)
+		}
 	}
-	ms := fuzzy.Find(strings.ToLower(l.query), titles)
-	idx := make([]int, len(ms))
-	for i, mt := range ms {
-		idx[i] = mt.Index
-	}
-	sort.Ints(idx) // keep outline order
-	out := make([]Item, len(idx))
-	for i, j := range idx {
-		out[i] = items[j]
+	// Prefer literal input/output matches. Fuzzy matching applies to concise
+	// outline titles, not arbitrary subsequences across a long response.
+	for _, match := range fuzzy.Find(query, titles) {
+		if !exact[match.Index] {
+			out = append(out, items[match.Index])
+		}
 	}
 	return out
 }

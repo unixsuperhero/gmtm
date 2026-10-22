@@ -42,8 +42,12 @@ func (p *page) find(id string) (row, bool) {
 
 // refresh rebuilds items; list.SetItems keeps selection by stable ID and the
 // list's query/filters/sort/grouping/scope/scroll are untouched.
-func (p *page) refresh(s domain.Snapshot, d storeData) {
-	p.lst = p.lst.SetItems(p.build(s, d))
+func (p *page) refresh(s domain.Snapshot, d storeData, project string, scoped bool) {
+	if p.id == actions.PagePanes {
+		p.lst = p.lst.SetItems(windowRows(s, project, scoped))
+	} else {
+		p.lst = p.lst.SetItems(p.build(s, d))
+	}
 	p.lst.Pins, p.lst.Stars = d.Pins, d.Stars
 }
 
@@ -63,7 +67,6 @@ func fd(name string, groupable bool) list.FieldDef {
 func newPages() []*page {
 	panes := &page{id: actions.PagePanes, title: "Panes", detailRows: 12,
 		lst:    list.New([]list.FieldDef{fd("host", true), fd("session", true), fd("project", true), fd("kind", true), fd("state", true), fd("attention", true), fd("harness", true), {Name: "lastActivity", Sortable: true}, {Name: "name", Sortable: true}}),
-		build:  func(s domain.Snapshot, _ storeData) []list.Item { return windowRows(s) },
 		detail: func(a *App, w, h int) string { return a.paneDetail(w, h) },
 		empty:  func(a *App) string { return a.emptyInventory() }}
 	panes.lst = panes.lst.SetGroupConfigs([]list.GroupConfig{{Name: "none"}, {Name: "by project", Fields: []string{"project", "session"}}, {Name: "by kind", Fields: []string{"kind"}}, {Name: "by attention", Fields: []string{"attention"}}})

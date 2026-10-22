@@ -15,6 +15,7 @@ import (
 
 	"github.com/unixsuperhero/gmtm/internal/domain"
 	"github.com/unixsuperhero/gmtm/internal/ui/forms"
+	"github.com/unixsuperhero/gmtm/internal/ui/readline"
 )
 
 // SaveMsg asks the orchestrator to persist the note. NoProject is the
@@ -38,6 +39,7 @@ type Model struct {
 
 	choosing bool
 	query    textinput.Model
+	editor   readline.Editor
 	hl       int
 
 	ctrlEnter bool
@@ -252,8 +254,7 @@ func (m *Model) chooseKey(k tea.KeyMsg) tea.Cmd {
 			m.choose(opts[m.hl].Value)
 		}
 	default:
-		var cmd tea.Cmd
-		m.query, cmd = m.query.Update(k)
+		cmd := m.editor.Update(&m.query, k, false)
 		m.hl = 0
 		return cmd
 	}

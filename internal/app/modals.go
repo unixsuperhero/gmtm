@@ -225,6 +225,9 @@ func (a *App) handleModuleMsg(msg tea.Msg) (tea.Cmd, bool) {
 			a.removeLayer(m.layer)
 		}
 		a.status = m.ok
+		if m.activeProject != nil {
+			a.setActive(*m.activeProject)
+		}
 		return a.loadStore(), true
 	case launchMsg:
 		return a.onLaunch(m), true

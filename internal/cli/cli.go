@@ -122,6 +122,10 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return env.server(rest)
 	case "actions":
 		return env.actions(rest)
+	case "setup":
+		return env.setup(rest)
+	case "capture":
+		return env.capture(rest)
 	}
 	return env.external(sub, rest)
 }

@@ -62,6 +62,8 @@ func Defs() []Action {
 		{ID: "context.clear", Verb: "Clear", Object: "Context project", Description: "Remove the selected item's project association (no-project)", Modes: n, Keys: []string{"D"}, Page: PageContext, NeedsTarget: true},
 		{ID: "setting.edit", Verb: "Edit", Object: "Setting", Description: "Edit the selected setting", Modes: n, Keys: []string{"enter"}, Page: PageSettings, NeedsTarget: true},
 		{ID: "setting.reset", Verb: "Reset", Object: "Setting", Description: "Reset the selected setting to its default", Modes: n, Keys: []string{"r"}, Page: PageSettings, NeedsTarget: true},
+		{ID: "capture.setup", Verb: "Set up", Object: "Capture", Description: "Install terminal command/output and agent prompt/response capture", Modes: n, Page: PageSettings},
+		{ID: "capture.status", Verb: "Inspect", Object: "Capture setup", Description: "Inspect capture integration status and file paths", Modes: n, Page: PageSettings},
 		{ID: "server.start", Verb: "Start", Object: "Server", Description: "Start the selected isolated TUIOS server, then resynchronize", Modes: n, Keys: []string{"S"}},
 		{ID: "refresh", Verb: "Refresh", Description: "Re-read the inventory from the selected server", Modes: n, Keys: []string{"ctrl+r"}},
 		{ID: "quit", Verb: "Quit", Description: "Quit mtm (managed windows and the server keep running)", Modes: n, Keys: []string{"q", "ctrl+c"}},

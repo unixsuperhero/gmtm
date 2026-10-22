@@ -1,7 +1,6 @@
-// Package forms is mtm's single form interaction system: field kinds,
-// normal/insert modality, navigation, suggestions, staging of user-extensible
-// values, linked parent/child fields, fuzzy path picker requests and async
-// completions bound to field IDs and edit generations.
+// Package forms implements a shared single-line editor above a field/value
+// table. Enter :code to edit a field, Enter to apply it, and Ctrl+S to submit.
+// New extensible values are staged only in the successful SubmitMsg.
 package forms
 
 import (
@@ -13,11 +12,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/cursor"
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/unixsuperhero/gmtm/internal/ui/readline"
 )
 
 // SubmitMsg is emitted after a successful submit. Staged lists, per field,
@@ -28,7 +29,7 @@ type SubmitMsg struct {
 	Staged map[string][]string
 }
 
-// CancelMsg is emitted by Escape in normal mode; the orchestrator decides
+// CancelMsg is emitted by Escape at the field table; the orchestrator decides
 // whether to confirm discarding a dirty draft.
 type CancelMsg struct {
 	FormID string
@@ -73,8 +74,8 @@ type Draft struct {
 
 type fieldState struct {
 	f           Field
-	in          textinput.Model
-	ta          textarea.Model
+	code        string
+	raw         string
 	items       []string
 	b, bset     bool
 	answered    bool
@@ -82,33 +83,12 @@ type fieldState struct {
 	gen         int
 	async       []Option
 	err, note   string
-	cyc         []Option
-	cycIdx      int
 	hl          int
 }
 
-func (s *fieldState) text() string {
-	if s.f.Kind == Multiline {
-		return s.ta.Value()
-	}
-	return s.in.Value()
-}
+func (s *fieldState) text() string { return s.raw }
 
-func (s *fieldState) blur() {
-	s.in.Blur()
-	if s.f.Kind == Multiline {
-		s.ta.Blur()
-	}
-}
-
-func (s *fieldState) setText(t string) {
-	if s.f.Kind == Multiline {
-		s.ta.SetValue(t)
-		return
-	}
-	s.in.SetValue(t)
-	s.in.CursorEnd()
-}
+func (s *fieldState) setText(t string) { s.raw = t }
 
 // Form is the form model. Update returns commands that emit SubmitMsg,
 // CancelMsg, CompletionMsg and PickRequestMsg.
@@ -119,51 +99,37 @@ type Form struct {
 
 	fields  []*fieldState
 	byID    map[string]*fieldState
+	byCode  map[string]int
 	focus   int
 	insert  bool
-	finding bool
-	finder  textinput.Model
-	findHL  int
+	input   textinput.Model
+	editor  readline.Editor
 	initial string
 	status  string
 }
 
-const reservedKeys = "jkhliagGx/ 0123456789"
-
-// New builds a form. It rejects duplicate IDs, unknown parents and shortcuts
-// that collide with navigation keys or each other.
+// New rejects empty IDs, case-insensitive duplicate IDs and unknown parents.
+// Codes use an unused lowercase letter where possible, then longer codes.
 func New(id, title string, fields ...Field) (*Form, error) {
 	f := &Form{ID: id, Title: title, byID: map[string]*fieldState{},
-		CompleteTimeout: 5 * time.Second}
-	short := map[rune]string{}
+		byCode: map[string]int{}, CompleteTimeout: 5 * time.Second}
+	ids := make(map[string]bool, len(fields))
 	for _, fd := range fields {
-		if fd.ID == "" || f.byID[fd.ID] != nil {
-			return nil, fmt.Errorf("forms: empty or duplicate field id %q", fd.ID)
+		code := strings.ToLower(fd.ID)
+		if code == "" || strings.ContainsAny(code, ": \t\r\n") {
+			return nil, fmt.Errorf("forms: invalid field id %q", fd.ID)
 		}
-		if fd.Shortcut != 0 {
-			if strings.ContainsRune(reservedKeys, fd.Shortcut) {
-				return nil, fmt.Errorf("forms: shortcut %q of %s collides with navigation", fd.Shortcut, fd.ID)
-			}
-			if o, dup := short[fd.Shortcut]; dup {
-				return nil, fmt.Errorf("forms: shortcut %q used by %s and %s", fd.Shortcut, o, fd.ID)
-			}
-			short[fd.Shortcut] = fd.ID
+		if ids[code] {
+			return nil, fmt.Errorf("forms: duplicate field id %q", fd.ID)
 		}
+		ids[code] = true
+		code = fieldCode(code, f.byCode)
 		if fd.Kind == Linked && fd.ParentID == "" {
 			return nil, fmt.Errorf("forms: linked field %s needs ParentID", fd.ID)
 		}
-		s := &fieldState{f: fd, in: textinput.New(), cycIdx: -1}
-		s.in.Prompt = ""
-		s.in.Cursor.SetMode(cursor.CursorStatic)
-		if fd.Kind == Multiline {
-			s.ta = textarea.New()
-			s.ta.ShowLineNumbers = false
-			s.ta.Prompt = "  "
-			s.ta.SetWidth(72)
-			s.ta.SetHeight(5)
-			s.ta.Cursor.SetMode(cursor.CursorStatic)
-		}
+		s := &fieldState{f: fd, code: code, hl: -1}
 		f.applyDefault(s)
+		f.byCode[code] = len(f.fields)
 		f.fields = append(f.fields, s)
 		f.byID[fd.ID] = s
 	}
@@ -172,11 +138,49 @@ func New(id, title string, fields ...Field) (*Form, error) {
 			return nil, fmt.Errorf("forms: field %s has unknown parent %s", s.f.ID, p)
 		}
 	}
-	f.finder = textinput.New()
-	f.finder.Prompt = "find field: "
-	f.finder.Cursor.SetMode(cursor.CursorStatic)
+	f.input = textinput.New()
+	f.input.Prompt = "> "
+	f.input.CharLimit = 0
+	f.input.Cursor.SetMode(cursor.CursorStatic)
+	f.input.Focus()
+	if len(f.fields) == 1 {
+		f.setInsert(true)
+	}
 	f.initial = f.draftKey()
 	return f, nil
+}
+
+func fieldCode(id string, used map[string]int) string {
+	for _, r := range id {
+		if r < 'a' || r > 'z' {
+			continue
+		}
+		code := string(r)
+		if _, exists := used[code]; !exists {
+			return code
+		}
+	}
+	// Exhaust single-letter codes before allocating a longer code.
+	for r := 'a'; r <= 'z'; r++ {
+		if _, exists := used[string(r)]; !exists {
+			return string(r)
+		}
+	}
+	for code := []byte("aa"); ; {
+		if _, exists := used[string(code)]; !exists {
+			return string(code)
+		}
+		i := len(code) - 1
+		for i >= 0 && code[i] == 'z' {
+			code[i] = 'a'
+			i--
+		}
+		if i < 0 {
+			code = append(code, 'a')
+		} else {
+			code[i]++
+		}
+	}
 }
 
 func (f *Form) applyDefault(s *fieldState) {
@@ -191,9 +195,19 @@ func (f *Form) applyDefault(s *fieldState) {
 		s.setText(strconv.Itoa(d))
 	case []string:
 		s.items = append([]string(nil), d...)
+		if s.f.Kind.choiceLike() {
+			for i, item := range s.items {
+				if o, ok := ExactMatch(item, f.allOptions(s)); ok {
+					s.items[i] = o.Value
+				}
+			}
+		}
 	case string:
 		if o, ok := ExactMatch(d, f.allOptions(s)); ok && s.f.Kind.choiceLike() {
 			d = o.Display()
+			if s.f.multi() {
+				d = o.Value
+			}
 		}
 		if s.f.multi() {
 			s.items = []string{d}
@@ -208,11 +222,11 @@ func (f *Form) applyDefault(s *fieldState) {
 func (f *Form) SetOptions(fieldID string, opts []Option) {
 	if s := f.byID[fieldID]; s != nil {
 		s.f.Options = opts
-		s.cyc = nil
+		s.hl = -1
 	}
 }
 
-// Insert reports whether the form is in insert mode.
+// Insert reports whether the shared input is editing a field.
 func (f *Form) Insert() bool { return f.insert }
 
 // Focused returns the focused field's ID.
@@ -286,7 +300,12 @@ func (f *Form) Draft() Draft {
 
 // Restore loads a draft; unknown field IDs are ignored. Restoring bumps every
 // generation so in-flight completions cannot overwrite restored values.
+// The shared editor is refreshed if the restored field is being edited.
 func (f *Form) Restore(d Draft) {
+	for _, s := range f.fields {
+		s.gen++
+		s.async = nil
+	}
 	for id, fd := range d.Fields {
 		s := f.byID[id]
 		if s == nil {
@@ -296,10 +315,12 @@ func (f *Form) Restore(d Draft) {
 		s.items = append([]string(nil), fd.Items...)
 		s.bset, s.b = fd.Bool != nil, fd.Bool != nil && *fd.Bool
 		s.answered, s.fromDefault = fd.Answered, fd.FromDefault
-		s.gen++
-		s.err, s.note, s.cyc = "", "", nil
+		s.err, s.note, s.hl = "", "", -1
 	}
 	f.FocusField(d.Focus)
+	if f.insert {
+		f.loadInput()
+	}
 }
 
 func (f *Form) draftKey() string {
@@ -384,23 +405,44 @@ func (f *Form) value(s *fieldState) (v any, has, none bool, staged []string, inv
 		}
 		return n, true, false, nil, ""
 	case Bool:
+		if t != "" {
+			switch strings.ToLower(t) {
+			case "true", "yes":
+				return true, true, false, nil, ""
+			case "false", "no":
+				return false, true, false, nil, ""
+			default:
+				return nil, false, false, nil, "choose true or false"
+			}
+		}
 		return s.b, s.bset, false, nil, ""
 	}
 	if s.f.multi() {
-		items := append([]string(nil), s.items...)
+		items := make([]string, 0, len(s.items)+1)
+		pending := s.items
 		if t != "" {
-			if o, ok := ExactMatch(t, f.allOptions(s)); ok {
-				items = append(items, o.Value)
-			} else if s.f.Kind == MultiSelect {
-				return nil, false, false, nil, fmt.Sprintf("%q is not one of the allowed options", t)
-			} else {
-				items = append(items, t)
-			}
+			pending = append(append([]string(nil), pending...), t)
 		}
-		if s.f.Kind == Extensible {
-			for _, it := range items {
-				if _, ok := ExactMatch(it, f.allOptions(s)); !ok {
-					staged = append(staged, it)
+		for _, it := range pending {
+			v := it
+			if o, ok := ExactMatch(it, f.allOptions(s)); ok {
+				v = o.Value
+			} else if s.f.Kind == MultiSelect {
+				return nil, false, false, nil, fmt.Sprintf("%q is not one of the allowed options", it)
+			}
+			duplicate := false
+			for _, existing := range items {
+				if existing == v {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				items = append(items, v)
+				if s.f.Kind == Extensible {
+					if _, ok := ExactMatch(v, f.allOptions(s)); !ok {
+						staged = append(staged, v)
+					}
 				}
 			}
 		}
@@ -432,18 +474,10 @@ func (f *Form) suggestions(s *fieldState) []Option {
 			return append(localPathOptions(t, s.f.Path.Mode), Rank(t, s.async)...)
 		}
 		return Rank(t, s.async)
+	case s.f.Kind == Bool:
+		return Rank(t, []Option{{Value: "true"}, {Value: "false"}})
 	case s.f.Kind.choiceLike():
-		in := map[string]bool{}
-		for _, it := range s.items {
-			in[it] = true
-		}
-		var out []Option
-		for _, o := range Rank(t, f.options(s)) {
-			if !in[o.Value] {
-				out = append(out, o)
-			}
-		}
-		return out
+		return Rank(t, f.options(s))
 	case s.f.Complete != nil:
 		return Rank(t, s.async)
 	}
@@ -462,7 +496,7 @@ func (f *Form) Update(msg tea.Msg) tea.Cmd {
 		if s == nil || (m.FormID != "" && m.FormID != f.ID) || m.Gen != s.gen {
 			return nil // stale or foreign
 		}
-		s.async, s.cyc = m.Options, nil
+		s.async, s.hl = m.Options, -1
 		if m.Err != nil {
 			s.note = "completion failed: " + m.Err.Error()
 		}
@@ -486,8 +520,20 @@ func (f *Form) Update(msg tea.Msg) tea.Cmd {
 			f.touched(s)
 			s.note = "picked with fuzzy picker"
 		}
+		if f.insert && f.cur() == s {
+			f.loadInput()
+		}
 	case tea.KeyMsg:
 		return f.key(m)
+	case pasteMsg:
+		if m.gen != f.inputGeneration() {
+			return nil
+		}
+		return f.updateInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(encodeLine(m.text)), Paste: true})
+	default:
+		var cmd tea.Cmd
+		f.input, cmd = f.input.Update(msg)
+		return cmd
 	}
 	return nil
 }
@@ -495,127 +541,229 @@ func (f *Form) Update(msg tea.Msg) tea.Cmd {
 func (f *Form) cur() *fieldState { return f.fields[f.focus] }
 
 func (f *Form) key(k tea.KeyMsg) tea.Cmd {
-	if len(f.fields) == 0 {
-		if k.String() == "esc" {
-			return emit(CancelMsg{FormID: f.ID, Dirty: false})
-		}
-		return nil
-	}
-	if f.finding {
-		return f.finderKey(k)
-	}
-	s := f.cur()
 	switch k.String() {
 	case "ctrl+s":
 		return f.Submit()
-	case "ctrl+o":
-		return f.pick(s)
-	case "tab":
-		f.setFocus(f.focus + 1)
-		return nil
-	case "shift+tab":
-		f.setFocus(f.focus - 1)
-		return nil
-	}
-	if f.insert {
-		return f.insertKey(s, k)
-	}
-	return f.normalKey(s, k)
-}
-
-func (f *Form) normalKey(s *fieldState, k tea.KeyMsg) tea.Cmd {
-	ks := k.String()
-	switch ks {
 	case "esc":
-		return emit(CancelMsg{FormID: f.ID, Dirty: f.Dirty()})
-	case "j", "down":
-		f.setFocus(f.focus + 1)
-	case "k", "up":
-		f.setFocus(f.focus - 1)
-	case "g":
-		f.setFocus(0)
-	case "G":
-		f.setFocus(len(f.fields) - 1)
-	case "/":
-		f.finding, f.findHL = true, 0
-		f.finder.SetValue("")
-		f.finder.Focus()
-	case "i", "a", "enter":
-		if s.f.Kind == Bool {
-			return f.toggle(s)
-		}
-		f.setInsert(true)
-	case "h", "left":
-		return f.cycle(s, -1)
-	case "l", "right":
-		return f.cycle(s, 1)
-	case " ":
-		if s.f.Kind == MultiSelect {
-			return f.toggleHL(s)
-		}
-		return f.cycle(s, 1)
-	case "x":
-		s.setText("")
-		s.items, s.bset = nil, false
-		return f.touched(s)
-	default:
-		if len(ks) == 1 && ks[0] >= '0' && ks[0] <= '9' {
-			n := int(ks[0] - '1')
-			if ks == "0" {
-				n = 9
-			}
-			if n < len(f.fields) {
-				f.setFocus(n)
-			}
+		if f.insert {
+			f.setInsert(false)
 			return nil
 		}
-		if r := []rune(ks); len(r) == 1 {
-			for i, o := range f.fields {
-				if o.f.Shortcut == r[0] {
-					f.setFocus(i)
-					f.setInsert(true)
-				}
+		return emit(CancelMsg{FormID: f.ID, Dirty: f.Dirty()})
+	case "ctrl+v":
+		gen := f.inputGeneration()
+		return func() tea.Msg {
+			text, err := clipboard.ReadAll()
+			if err != nil {
+				return nil
 			}
+			return pasteMsg{text: text, gen: gen}
 		}
 	}
-	return nil
+	if !f.insert {
+		if k.String() == "enter" {
+			code := strings.TrimSpace(f.input.Value())
+			i, ok := f.byCode[strings.TrimPrefix(code, ":")]
+			if !strings.HasPrefix(code, ":") || !ok {
+				f.status = "unknown field code; enter :code from the table"
+				return nil
+			}
+			f.setFocus(i)
+			f.setInsert(true)
+			f.status = ""
+			return f.completeCmd(f.cur())
+		}
+		return f.updateInput(k)
+	}
+	s := f.cur()
+	switch k.String() {
+	case "ctrl+o":
+		return f.pick(s)
+	case "ctrl+n", "down":
+		f.moveSuggestion(s, 1)
+		return nil
+	case "ctrl+p", "up":
+		f.moveSuggestion(s, -1)
+		return nil
+	case "tab":
+		if s.f.multi() {
+			return f.acceptMulti(s, true)
+		}
+		f.chooseSuggestion(s)
+		f.loadInput()
+		return nil
+	case "enter":
+		if !f.applyEdit() {
+			return nil
+		}
+		f.setInsert(false)
+		return nil
+	case "backspace":
+		if s.f.multi() && f.input.Value() == "" && len(s.items) > 0 {
+			s.items = s.items[:len(s.items)-1]
+			return f.touched(s)
+		}
+	}
+	// textinput sanitizes actual newlines. Escape them before they reach it,
+	// including bracketed paste, so multiline values remain lossless.
+	if k.Type == tea.KeyRunes {
+		text := string(k.Runes)
+		if k.Paste {
+			text = encodeLine(text)
+		} else {
+			text = lineControls.Replace(text)
+		}
+		k.Runes = []rune(text)
+	}
+	return f.updateInput(k)
 }
 
-func (f *Form) insertKey(s *fieldState, k tea.KeyMsg) tea.Cmd {
-	ks := k.String()
-	switch {
-	case ks == "esc":
-		f.setInsert(false)
-		return nil
-	case (ks == "ctrl+n" || ks == "ctrl+p") && s.f.Kind != Multiline:
-		d := 1
-		if ks == "ctrl+p" {
-			d = -1
-		}
-		f.cycleSuggest(s, d)
-		return nil
-	case ks == "enter" && s.f.Kind != Multiline:
-		if s.f.multi() {
-			return f.addPending(s)
-		}
-		f.setInsert(false)
-		f.setFocus(f.focus + 1)
-		return nil
-	case ks == "backspace" && s.f.multi() && s.text() == "" && len(s.items) > 0:
-		s.items = s.items[:len(s.items)-1]
-		return f.touched(s)
+type pasteMsg struct {
+	text string
+	gen  string
+}
+
+func (f *Form) inputGeneration() string {
+	if f.insert {
+		return fmt.Sprintf("%s/%d", f.Focused(), f.cur().gen)
 	}
-	before := s.text()
-	var cmd tea.Cmd
-	if s.f.Kind == Multiline {
-		s.ta, cmd = s.ta.Update(k)
-	} else {
-		s.in, cmd = s.in.Update(k)
+	return "selector/" + f.input.Value()
+}
+
+// encodeLine/decodeLine deliberately recognize only these four escapes.
+// Unknown escapes and an unfinished trailing backslash are preserved.
+var lineEscaper = strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
+var lineControls = strings.NewReplacer("\n", `\n`, "\r", `\r`, "\t", `\t`)
+
+func encodeLine(s string) string { return lineEscaper.Replace(s) }
+
+func decodeLine(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
 	}
-	if s.text() != before {
-		return tea.Batch(cmd, f.touched(s))
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case 'n':
+				b.WriteByte('\n')
+			case 'r':
+				b.WriteByte('\r')
+			case 't':
+				b.WriteByte('\t')
+			case '\\':
+				b.WriteByte('\\')
+			default:
+				b.WriteByte(s[i])
+				continue
+			}
+			i++
+		} else {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}
+
+func (f *Form) updateInput(k tea.KeyMsg) tea.Cmd {
+	before := f.input.Value()
+	cmd := f.editor.Update(&f.input, k, f.insert && f.cur().f.Kind == Path)
+	if f.input.Value() != before {
+		f.status = ""
+		if f.insert {
+			s := f.cur()
+			s.setText(decodeLine(f.input.Value()))
+			if s.f.Kind == Bool {
+				s.bset = false
+			}
+			return tea.Batch(cmd, f.touched(s))
+		}
 	}
 	return cmd
+}
+
+func (f *Form) moveSuggestion(s *fieldState, delta int) {
+	n := len(f.suggestions(s))
+	if n == 0 {
+		s.hl = -1
+		return
+	}
+	if s.hl < 0 && delta < 0 {
+		s.hl = 0
+	}
+	s.hl = (s.hl + delta + n) % n
+}
+
+func (f *Form) chooseSuggestion(s *fieldState) {
+	options := f.suggestions(s)
+	if s.hl >= 0 && s.hl < len(options) {
+		o := options[s.hl]
+		text := o.Value
+		if s.f.Kind.choiceLike() {
+			text = o.Display()
+		}
+		s.setText(text)
+		f.touched(s)
+	}
+}
+
+func (f *Form) acceptMulti(s *fieldState, toggle bool) tea.Cmd {
+	f.chooseSuggestion(s)
+	t := strings.TrimSpace(s.text())
+	if t == "" {
+		return nil
+	}
+	v := t
+	if o, ok := ExactMatch(t, f.options(s)); ok {
+		v = o.Value
+	} else if s.f.Kind == MultiSelect {
+		s.err = fmt.Sprintf("%q is not one of the allowed options", t)
+		return nil
+	}
+	found := false
+	for i, it := range s.items {
+		if it == v {
+			if toggle {
+				s.items = append(s.items[:i], s.items[i+1:]...)
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.items = append(s.items, v)
+	}
+	s.setText("")
+	cmd := f.touched(s)
+	f.loadInput()
+	return cmd
+}
+
+func (f *Form) applyEdit() bool {
+	if !f.insert {
+		return true
+	}
+	s := f.cur()
+	f.chooseSuggestion(s)
+	_, _, _, _, invalid := f.value(s)
+	if invalid != "" {
+		s.err = invalid
+		f.loadInput()
+		return false
+	}
+	if s.f.multi() {
+		f.acceptMulti(s, false)
+	} else if s.f.Kind == Bool {
+		v, has, _, _, _ := f.value(s)
+		s.b, s.bset = v.(bool), has
+		s.setText("")
+		f.touched(s)
+	} else {
+		f.touched(s)
+	}
+	f.loadInput()
+	return true
 }
 
 // touched records a user edit: bumps the generation, re-applies linking and
@@ -623,7 +771,7 @@ func (f *Form) insertKey(s *fieldState, k tea.KeyMsg) tea.Cmd {
 func (f *Form) touched(s *fieldState) tea.Cmd {
 	s.answered, s.fromDefault = true, false
 	s.gen++
-	s.cyc, s.cycIdx = nil, -1
+	s.hl = -1
 	s.err = ""
 	f.relink(s)
 	return f.completeCmd(s)
@@ -673,98 +821,6 @@ func (f *Form) completeCmd(s *fieldState) tea.Cmd {
 	}
 }
 
-func (f *Form) cycleSuggest(s *fieldState, d int) {
-	if s.cyc == nil {
-		s.cyc, s.cycIdx = f.suggestions(s), -1
-	}
-	n := len(s.cyc)
-	if n == 0 {
-		return
-	}
-	if s.cycIdx < 0 && d < 0 {
-		s.cycIdx = 0
-	}
-	s.cycIdx = (s.cycIdx + d + n) % n
-	s.setText(s.cyc[s.cycIdx].Display())
-	s.answered, s.fromDefault = true, false
-	s.gen++
-	s.err = ""
-	f.relink(s)
-}
-
-func (f *Form) cycle(s *fieldState, d int) tea.Cmd {
-	switch {
-	case s.f.Kind == Bool:
-		return f.toggle(s)
-	case s.f.Kind == MultiSelect:
-		if n := len(f.options(s)); n > 0 {
-			s.hl = (s.hl + d + n) % n
-		}
-		return nil
-	case !s.f.Kind.choiceLike() || s.f.multi():
-		return nil
-	}
-	opts := f.options(s)
-	if len(opts) == 0 {
-		return nil
-	}
-	i := -1
-	for j, o := range opts {
-		if o.is(s.text()) {
-			i = j
-		}
-	}
-	if i < 0 && d < 0 {
-		i = 0
-	}
-	s.setText(opts[(i+d+len(opts))%len(opts)].Display())
-	return f.touched(s)
-}
-
-func (f *Form) toggle(s *fieldState) tea.Cmd {
-	s.b, s.bset = !s.b, true
-	return f.touched(s)
-}
-
-func (f *Form) toggleHL(s *fieldState) tea.Cmd {
-	opts := f.options(s)
-	if s.hl >= len(opts) {
-		return nil
-	}
-	v := opts[s.hl].Value
-	for i, it := range s.items {
-		if it == v {
-			s.items = append(s.items[:i], s.items[i+1:]...)
-			return f.touched(s)
-		}
-	}
-	s.items = append(s.items, v)
-	return f.touched(s)
-}
-
-func (f *Form) addPending(s *fieldState) tea.Cmd {
-	t := strings.TrimSpace(s.text())
-	if t == "" {
-		return nil
-	}
-	v := t
-	if o, ok := ExactMatch(t, f.allOptions(s)); ok {
-		v = o.Value
-	} else if s.f.Kind == MultiSelect {
-		s.err = fmt.Sprintf("%q is not one of the allowed options", t)
-		return nil
-	}
-	for _, it := range s.items {
-		if it == v {
-			s.setText("")
-			return f.touched(s)
-		}
-	}
-	s.items = append(s.items, v)
-	s.setText("")
-	return f.touched(s)
-}
-
 func (f *Form) pick(s *fieldState) tea.Cmd {
 	if s.f.Kind != Path {
 		return nil
@@ -783,67 +839,42 @@ func (f *Form) pick(s *fieldState) tea.Cmd {
 }
 
 func (f *Form) setFocus(i int) {
+	if len(f.fields) == 0 {
+		return
+	}
 	n := len(f.fields)
-	i = ((i % n) + n) % n
-	f.cur().blur()
-	f.focus = i
-	f.setInsert(f.insert)
+	f.focus = ((i % n) + n) % n
+	if f.insert {
+		f.loadInput()
+	}
+}
+
+func (f *Form) loadInput() {
+	s := f.cur()
+	text := s.text()
+	if s.f.Kind == Bool && text == "" && s.bset {
+		text = strconv.FormatBool(s.b)
+	}
+	f.input.SetValue(encodeLine(text))
+	f.input.CursorEnd()
 }
 
 func (f *Form) setInsert(on bool) {
-	s := f.cur()
-	if s.f.Kind == Bool {
-		on = false
-	}
 	f.insert = on
 	if on {
-		s.in.Focus()
-		if s.f.Kind == Multiline {
-			s.ta.Focus()
-		}
+		f.cur().hl = -1
+		f.loadInput()
 	} else {
-		s.blur()
+		f.input.SetValue("")
 	}
-}
-
-func (f *Form) finderKey(k tea.KeyMsg) tea.Cmd {
-	matches := f.finderMatches()
-	switch k.String() {
-	case "esc":
-		f.finding = false
-	case "ctrl+n", "down":
-		if len(matches) > 0 {
-			f.findHL = (f.findHL + 1) % len(matches)
-		}
-	case "ctrl+p", "up":
-		if len(matches) > 0 {
-			f.findHL = (f.findHL - 1 + len(matches)) % len(matches)
-		}
-	case "enter":
-		f.finding = false
-		if f.findHL < len(matches) {
-			f.FocusField(matches[f.findHL].Value)
-		}
-	default:
-		var cmd tea.Cmd
-		f.finder, cmd = f.finder.Update(k)
-		f.findHL = 0
-		return cmd
-	}
-	return nil
-}
-
-func (f *Form) finderMatches() []Option {
-	opts := make([]Option, len(f.fields))
-	for i, s := range f.fields {
-		opts[i] = Option{Value: s.f.ID, Label: s.f.Label}
-	}
-	return Rank(f.finder.Value(), opts)
 }
 
 // Submit validates every field. On failure it keeps the draft, marks errors
 // and focuses the first invalid field; on success it emits SubmitMsg.
 func (f *Form) Submit() tea.Cmd {
+	if !f.applyEdit() {
+		return nil
+	}
 	vals, staged := map[string]any{}, map[string][]string{}
 	bad, first := 0, -1
 	for i, s := range f.fields {
@@ -876,6 +907,7 @@ func (f *Form) Submit() tea.Cmd {
 	}
 	if bad > 0 {
 		f.status = fmt.Sprintf("%d field(s) need attention; draft kept", bad)
+		f.setInsert(false)
 		f.setFocus(first)
 		return nil
 	}
@@ -892,190 +924,136 @@ func (f *Form) labelOf(s *fieldState, v string) string {
 	return v
 }
 
-func (f *Form) display(s *fieldState, focused bool) string {
-	if focused && f.insert {
-		if s.f.Kind == Multiline {
-			return "\n" + s.ta.View()
-		}
-		if s.f.multi() {
-			return f.itemsText(s) + " " + s.in.View()
-		}
-		return s.in.View()
-	}
+func (f *Form) display(s *fieldState) string {
 	switch {
 	case s.f.Kind == Bool:
+		if s.text() != "" {
+			return encodeLine(s.text())
+		}
 		if !s.bset {
 			return "(unset)"
 		}
-		if s.b {
-			return "yes"
-		}
-		return "no"
+		return strconv.FormatBool(s.b)
 	case s.f.multi():
-		t := f.itemsText(s)
-		if p := s.text(); p != "" {
-			t += " " + p
+		var parts []string
+		for _, it := range s.items {
+			parts = append(parts, "["+encodeLine(f.labelOf(s, it))+"]")
 		}
-		if strings.TrimSpace(t) == "" {
+		if s.text() != "" {
+			parts = append(parts, encodeLine(s.text()))
+		}
+		if len(parts) == 0 {
 			return "(none)"
 		}
-		return t
+		return strings.Join(parts, " ")
 	}
-	t := s.text()
-	if t == "" {
+	if s.text() == "" {
 		return "(empty)"
 	}
-	if s.f.Kind == Multiline && !focused {
-		if lines := strings.Split(t, "\n"); len(lines) > 1 {
-			return fmt.Sprintf("%s … (+%d lines)", lines[0], len(lines)-1)
-		}
-	}
-	if s.f.Kind == Multiline {
-		return "\n    " + strings.ReplaceAll(t, "\n", "\n    ")
-	}
-	return t
+	return encodeLine(s.text())
 }
 
-func (f *Form) itemsText(s *fieldState) string {
-	var parts []string
-	for _, it := range s.items {
-		parts = append(parts, "["+f.labelOf(s, it)+"]")
-	}
-	return strings.Join(parts, " ")
-}
-
-// View renders the form.
+// View renders exactly one editor, followed by a two-column table.
+// Multiline values are displayed as escapes, never as extra field rows.
 func (f *Form) View() string {
 	var b strings.Builder
-	mode := "NORMAL"
-	if f.insert {
-		mode = "INSERT"
+	if f.Width > 3 {
+		f.input.Width = f.Width - 3
 	}
-	b.WriteString(fmt.Sprintf("%s  [%s]", f.Title, mode))
+	b.WriteString(f.input.View() + "\n\n" + f.Title)
 	if f.Dirty() {
-		b.WriteString("  ● unsaved changes")
+		b.WriteString("  unsaved changes")
 	}
 	if f.status != "" {
 		b.WriteString("  ! " + f.status)
 	}
 	b.WriteString("\n")
-	for i, s := range f.fields {
-		focused := i == f.focus
-		mark := "  "
-		if focused {
-			mark = "> "
+	row := func(left, right string) {
+		width := 28
+		if f.Width > 0 {
+			width = f.Width / 2
+			if width < 8 {
+				width = 8
+			}
 		}
-		num := " "
-		if i < 10 {
-			num = strconv.Itoa((i + 1) % 10)
-		}
-		label := s.f.Label
-		if s.f.Required {
-			label += "*"
-		}
-		if s.f.Shortcut != 0 {
-			label += " (" + string(s.f.Shortcut) + ")"
-		}
-		line := fmt.Sprintf("%s%s %-18s %s", mark, num, label, f.display(s, focused))
-		if !focused && f.Width > 0 {
+		left = ansi.Truncate(left, width, "…")
+		line := left + strings.Repeat(" ", width-ansi.StringWidth(left)) + " | " + right
+		if f.Width > 0 {
 			line = ansi.Truncate(line, f.Width, "…")
 		}
 		b.WriteString(line + "\n")
-		f.details(&b, s, focused)
 	}
-	if f.finding {
-		b.WriteString("\n" + f.finder.View() + "\n")
-		for i, o := range f.finderMatches() {
-			m := "   "
-			if i == f.findHL {
-				m = " > "
+	if !f.insert {
+		row("Code / Field", "Current value")
+		for _, s := range f.fields {
+			label := ":" + s.code + " " + s.f.Label
+			if s.f.Required {
+				label += "*"
 			}
-			b.WriteString(m + o.Display() + "\n")
+			value := f.display(s)
+			if s.err != "" {
+				value += "  ! " + s.err
+			}
+			if s.note != "" {
+				value += "  " + encodeLine(s.note)
+			}
+			row(label, value)
 		}
+		b.WriteString("\n:code enter edit · ctrl+s submit · esc cancel")
+		return b.String()
 	}
-	b.WriteString("\n" + f.help())
-	return b.String()
-}
-
-func (f *Form) details(b *strings.Builder, s *fieldState, focused bool) {
-	sub := func(t string) { b.WriteString("      " + t + "\n") }
-	v, has, none, staged, invalid := f.value(s)
-	_ = v
-	if none {
-		sub("explicit choice: " + s.f.NoValue.Display())
-	} else if s.f.Required && !has && invalid == "" {
-		sub("missing (required)")
-	}
-	for _, st := range staged {
-		sub("+ new: " + st + "  (created on submit)")
-	}
-	if s.err != "" {
-		sub("! " + s.err)
-	} else if invalid != "" && s.answered {
-		sub("! " + invalid)
-	}
-	if s.note != "" {
-		sub("· " + s.note)
-	}
-	if !focused {
-		return
-	}
+	s := f.cur()
+	row(":"+s.code+" "+s.f.Label, f.display(s))
 	if s.f.Hint != "" {
-		sub("hint: " + s.f.Hint)
+		b.WriteString(encodeLine(s.f.Hint) + "\n")
 	}
-	if s.f.Default != nil {
-		sub(fmt.Sprintf("default: %v", s.f.Default))
-	}
-	if s.f.Kind == Choice || s.f.Kind == Linked || s.f.Kind == MultiSelect {
-		sub("closed list: only listed options are valid")
-	}
-	if s.f.Kind == Path {
-		if s.f.Path.Local() {
-			sub("host: local — ctrl+o opens the fuzzy " + s.f.Path.Mode.String() + " picker; typing completes")
-		} else {
-			sub(fmt.Sprintf("host: %s (remote) — no local picker for remote host; enter a path on %s", s.f.Path.Host, s.f.Path.Host))
+	options := f.suggestions(s)
+	if len(options) > 0 {
+		row("Known option", "Details")
+		start := 0
+		if s.hl >= 8 {
+			start = s.hl - 7
 		}
-	}
-	if s.f.Kind == MultiSelect && !f.insert {
-		var parts []string
-		for i, o := range f.options(s) {
-			box := "[ ]"
-			for _, it := range s.items {
-				if it == o.Value {
-					box = "[x]"
+		for i := start; i < len(options) && i < start+8; i++ {
+			o := options[i]
+			mark := "  "
+			if i == s.hl {
+				mark = "> "
+			}
+			if s.f.multi() {
+				mark += "[ ] "
+				for _, it := range s.items {
+					if it == o.Value {
+						mark = strings.Replace(mark, "[ ]", "[x]", 1)
+						break
+					}
 				}
 			}
-			m := ""
-			if i == s.hl {
-				m = ">"
-			}
-			parts = append(parts, m+box+" "+o.Display())
+			row(mark+encodeLine(o.Display()), encodeLine(o.Hint))
 		}
-		sub(strings.Join(parts, "  "))
-		return
 	}
-	if sug := f.suggestions(s); len(sug) > 0 {
-		if len(sug) > 6 {
-			sug = sug[:6]
-		}
-		var parts []string
-		for i, o := range sug {
-			t := o.Display()
-			if s.cyc != nil && i == s.cycIdx {
-				t = ">" + t
-			}
-			parts = append(parts, t)
-		}
-		sub("↳ " + strings.Join(parts, " · ") + "   (ctrl+n/ctrl+p)")
+	_, _, none, staged, invalid := f.value(s)
+	if none {
+		b.WriteString("explicit choice: " + s.f.NoValue.Display() + "\n")
 	}
-}
-
-func (f *Form) help() string {
-	if f.finding {
-		return "type to find field · ↑/↓ ctrl+n/p · enter jump · esc close"
+	for _, st := range staged {
+		b.WriteString("+ new: " + encodeLine(st) + " (created only on successful submit)\n")
 	}
-	if f.insert {
-		return "esc normal · tab/shift+tab field · ctrl+n/p suggestions · enter next/add · ctrl+o picker · ctrl+s submit"
+	if s.err != "" {
+		b.WriteString("! " + s.err + "\n")
+	} else if invalid != "" && s.answered {
+		b.WriteString("! " + invalid + "\n")
 	}
-	return "j/k field · 1-9 jump · / find · i edit · h/l cycle · space toggle · x clear · ctrl+o picker · ctrl+s submit · esc cancel"
+	if s.note != "" {
+		b.WriteString(encodeLine(s.note) + "\n")
+	}
+	b.WriteString("\nenter apply · ↑/↓ ctrl+n/p select option · tab accept")
+	if s.f.multi() {
+		b.WriteString("/toggle item · empty backspace remove last")
+	}
+	if s.f.Kind == Path {
+		b.WriteString(" · ctrl+o picker")
+	}
+	b.WriteString(" · ctrl+s submit · esc fields\nEscapes: \\n newline · \\r return · \\t tab · \\\\ backslash")
+	return b.String()
 }

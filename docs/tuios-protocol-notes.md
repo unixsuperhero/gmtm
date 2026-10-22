@@ -26,6 +26,12 @@ Verified replies:
 
 Key verbs (see `tuios list-verbs <verb>` for full params): list-sessions, session-info, new-session, rename-session, kill-session, list-windows, get-window, new-window, close-window, move-window{session,window,to_session|workspace}, focus-window, resize{session,window,width,height}, send-keys{keys,literal}, send-text{text,paste,submit}, capture-pane{source:visible|recent,styled,lines}, start-agent{session,agent,name,cwd,prompt,env,ready_timeout}, list-agents{session|all_sessions,all}, get-agent-state, agent-activity, agent-transcript (needs human_nonce from attach-presence), list-hosts, list-host-sessions{host}, subscribe{types[],after_seq,boot_id,hosts}, stream-pane{session,window,lease_cols,lease_rows,from_seq,boot_id}, wait-for, list-queued, queue-prompt, peek-prompt.
 
+`start-agent.env` is an override map on top of the daemon's environment, not a
+replacement environment; TUIOS accepts at most 64 entries. mtm forwards only
+`PATH` (so executable lookup matches the launcher) and `TUIOS_SERVER` (the selected
+server). Other variables, including credentials, are inherited from the daemon,
+not copied from the launching mtm process.
+
 ## stream-pane frames
 After the JSON reply line the connection carries binary frames: 1 type byte + u32 BE length + payload.
 From daemon: `S` snapshot (u64 seq, u16 cols, u16 rows, bytes), `O` output (u64 seq, bytes), `R` resize (u64 seq, u16 cols, u16 rows), `E` error (JSON), `X` exit (reason text).

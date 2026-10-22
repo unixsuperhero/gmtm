@@ -23,6 +23,7 @@ import (
 	"github.com/sahilm/fuzzy"
 
 	"github.com/unixsuperhero/gmtm/internal/ui/frame"
+	"github.com/unixsuperhero/gmtm/internal/ui/readline"
 )
 
 // Options configures a picker.
@@ -81,6 +82,7 @@ type Model struct {
 	cur    int
 	normal bool
 	tilde  bool // the last edit reset to home via "~"
+	editor readline.Editor
 
 	items    []string
 	listing  bool
@@ -285,13 +287,13 @@ func (m *Model) key(k tea.KeyMsg) tea.Cmd {
 		return m.choose()
 	case "tab":
 		return m.descend()
-	case "up", "ctrl+p", "ctrl+k":
+	case "up", "ctrl+p":
 		return m.move(-1)
 	case "down", "ctrl+n", "ctrl+j":
 		return m.move(1)
-	case "ctrl+d", "pgdown":
+	case "pgdown":
 		return m.move(max(1, m.listHeight()/2))
-	case "ctrl+u", "pgup":
+	case "pgup":
 		return m.move(-max(1, m.listHeight()/2))
 	case " ":
 		if m.opts.Multiple {
@@ -308,12 +310,16 @@ func (m *Model) normalKey(s string) tea.Cmd {
 	switch s {
 	case "j":
 		return m.move(1)
-	case "k":
+	case "k", "ctrl+k":
 		return m.move(-1)
 	case "ctrl+f":
 		return m.move(max(1, m.listHeight()))
 	case "ctrl+b":
 		return m.move(-max(1, m.listHeight()))
+	case "ctrl+d":
+		return m.move(max(1, m.listHeight()/2))
+	case "ctrl+u":
+		return m.move(-max(1, m.listHeight()/2))
 	case "g", "home":
 		return m.move(-len(m.rows))
 	case "G", "end":
@@ -338,48 +344,12 @@ func (m *Model) normalKey(s string) tea.Cmd {
 }
 
 func (m *Model) insertKey(k tea.KeyMsg, s string) tea.Cmd {
-	switch s {
-	case "backspace", "ctrl+h":
-		if len(m.query) == 0 {
-			return m.up()
-		}
-		if m.cur > 0 {
-			m.query = append(m.query[:m.cur-1], m.query[m.cur:]...)
-			m.cur--
-		}
+	if (s == "backspace" || s == "ctrl+h") && len(m.query) == 0 {
+		return m.up()
+	}
+	if q, pos, handled := m.editor.Edit(m.query, m.cur, s, true); handled {
+		m.query, m.cur = q, pos
 		return m.afterEdit()
-	case "delete":
-		if m.cur < len(m.query) {
-			m.query = append(m.query[:m.cur], m.query[m.cur+1:]...)
-			return m.afterEdit()
-		}
-		return nil
-	case "ctrl+w", "alt+backspace":
-		i := m.cur
-		for i > 0 && m.query[i-1] == ' ' {
-			i--
-		}
-		for i > 0 && m.query[i-1] != ' ' && m.query[i-1] != '/' {
-			i--
-		}
-		if i == m.cur && i > 0 {
-			i--
-		}
-		m.query = append(m.query[:i], m.query[m.cur:]...)
-		m.cur = i
-		return m.afterEdit()
-	case "left", "ctrl+b":
-		m.cur = max(0, m.cur-1)
-		return nil
-	case "right", "ctrl+f":
-		m.cur = min(len(m.query), m.cur+1)
-		return nil
-	case "ctrl+a", "home":
-		m.cur = 0
-		return nil
-	case "ctrl+e", "end":
-		m.cur = len(m.query)
-		return nil
 	}
 	if k.Type == tea.KeyRunes || k.Type == tea.KeySpace {
 		rs := k.Runes

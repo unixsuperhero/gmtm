@@ -56,15 +56,9 @@ func projectValue(v any) string {
 }
 
 func (a *App) openCreateForm(kind domain.Kind, r row, hasRow bool) tea.Cmd {
-	def := ""
-	if a.active != "" {
-		def = a.active
-	}
+	def := a.active
 	cwd := ""
 	if hasRow {
-		if p := r.rowProject(); p != "" {
-			def = p
-		}
 		if r.win != nil && hostOf(r.win.Target.Host) == domain.HostLocal {
 			cwd = r.win.CWD
 		}
@@ -99,7 +93,7 @@ func (a *App) openCreateForm(kind domain.Kind, r row, hasRow bool) tea.Cmd {
 			forms.Field{ID: "model", Label: "Model", Kind: forms.Linked, ParentID: "harness", Options: models, Hint: "blank = harness default"},
 			forms.Field{ID: "effort", Label: "Effort", Kind: forms.Linked, ParentID: "harness", Options: efforts, Hint: "only codex exposes effort"},
 			forms.Field{ID: "speed", Label: "Speed", Kind: forms.Linked, ParentID: "harness", Hint: "no recognized harness exposes a speed option"},
-			forms.Field{ID: "prompt", Label: "Prompt", Kind: forms.Multiline, Hint: "Enter inserts a newline; ctrl+s submits"},
+			forms.Field{ID: "prompt", Label: "Prompt", Kind: forms.Multiline, Hint: `use \n for line breaks or paste multiline text; ctrl+s submits`},
 			forms.Field{ID: "delivery", Label: "Delivery", Kind: forms.Choice, Options: []forms.Option{{Value: "send", Hint: "type once ready"}, {Value: "queue", Hint: "queue-prompt: typed when at rest"}}, Default: "send"},
 		)
 	}
@@ -142,12 +136,9 @@ func (a *App) openReassociateForm(it domain.ContextItem) tea.Cmd {
 }
 
 func (a *App) openProjectChooser() tea.Cmd {
-	var opts []forms.Option
-	for _, n := range projectNames(a.snap, a.data) {
-		opts = append(opts, forms.Option{Value: n})
-	}
-	f, err := forms.New("project-choose", "Active project",
-		forms.Field{ID: "project", Label: "Project", Kind: forms.Choice, Required: true, NoValue: noProject, Options: opts, Default: a.projectText()})
+	field := a.projectField("")
+	field.Default = nil
+	f, err := forms.New("project-choose", "Active project", field)
 	if err != nil {
 		a.status = "form: " + err.Error()
 		return nil
@@ -217,9 +208,20 @@ func (a *App) submit(m forms.SubmitMsg) tea.Cmd {
 			return tx.SetContextProject(id, p)
 		})
 	case m.FormID == "project-choose":
-		a.removeLayer(layer)
-		a.setActive(projectValue(v["project"]))
-		return nil
+		project := projectValue(v["project"])
+		if len(m.Staged["project"]) == 0 {
+			a.removeLayer(layer)
+			a.setActive(project)
+			return nil
+		}
+		save := a.tx("", layer, func(tx store.Tx) error {
+			return stagedProjects(tx, m.Staged)
+		})
+		return func() tea.Msg {
+			result := save().(txDoneMsg)
+			result.activeProject = &project
+			return result
+		}
 	case strings.HasPrefix(m.FormID, "setting-"):
 		key := strings.TrimPrefix(m.FormID, "setting-")
 		val := strings.TrimSpace(str(v["value"]))
