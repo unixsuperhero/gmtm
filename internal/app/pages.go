@@ -45,6 +45,8 @@ func (p *page) find(id string) (row, bool) {
 func (p *page) refresh(s domain.Snapshot, d storeData, project string, scoped bool) {
 	if p.id == actions.PagePanes {
 		p.lst = p.lst.SetItems(windowRows(s, project, scoped))
+	} else if p.id == actions.PageNotes {
+		p.lst = p.lst.SetItems(contextRows(d, "note", project, scoped))
 	} else {
 		p.lst = p.lst.SetItems(p.build(s, d))
 	}
@@ -81,7 +83,7 @@ func newPages() []*page {
 		build: projectRows}
 	ctx := &page{id: actions.PageContext, title: "Context", detailRows: 8,
 		lst:    list.New([]list.FieldDef{fd("kind", true), fd("project", true), fd("tags", true), {Name: "title", Sortable: true}}),
-		build:  func(_ domain.Snapshot, d storeData) []list.Item { return contextRows(d) },
+		build:  func(_ domain.Snapshot, d storeData) []list.Item { return contextRows(d, "", "", false) },
 		detail: func(a *App, w, h int) string { return a.contextDetail(w, h) },
 		empty: func(*App) string {
 			return "No context references found in captured output. Open Context to extract again, save from a window with 'a', or press F4 for a note."
@@ -90,5 +92,15 @@ func newPages() []*page {
 	settings := &page{id: actions.PageSettings, title: "Settings",
 		lst:   list.New([]list.FieldDef{fd("state", true)}),
 		build: func(_ domain.Snapshot, d storeData) []list.Item { return settingRows(d) }}
-	return []*page{panes, sessions, hosts, projects, ctx, settings}
+	notes := &page{id: actions.PageNotes, title: "Notes", detailRows: 8,
+		lst:    list.New([]list.FieldDef{fd("project", true), fd("tags", true), {Name: "title", Sortable: true}}),
+		detail: func(a *App, w, h int) string { return a.contextDetail(w, h) },
+		empty: func(a *App) string {
+			if a.active != "" || a.activeNone {
+				return "No saved notes for " + a.projectText() + ". F4 creates a note; P chooses another project."
+			}
+			return "No saved notes yet. F4 creates a note; P chooses a project."
+		}}
+	notes.lst = notes.lst.SetGroupConfigs([]list.GroupConfig{{Name: "none"}, {Name: "by project", Fields: []string{"project"}}})
+	return []*page{panes, sessions, hosts, projects, ctx, settings, notes}
 }

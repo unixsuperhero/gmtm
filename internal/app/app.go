@@ -98,11 +98,12 @@ type App struct {
 	historyInFlight bool
 	historyRead     time.Time
 
-	twoSrc     twopane.Source
-	saveSource *domain.Target
-	pickReq    *forms.PickRequestMsg
-	content    *contentView
-	status     string
+	twoSrc       twopane.Source
+	saveSource   *domain.Target
+	assignTarget domain.Target
+	pickReq      *forms.PickRequestMsg
+	content      *contentView
+	status       string
 
 	active     string
 	activeNone bool
@@ -264,6 +265,9 @@ func (a *App) loadStore() tea.Cmd {
 			return storeMsg{storeData{Err: err}}
 		}
 		if d.Stars, err = st.Stars(ctx); err != nil {
+			return storeMsg{storeData{Err: err}}
+		}
+		if d.PaneProjects, err = st.PaneProjects(ctx); err != nil {
 			return storeMsg{storeData{Err: err}}
 		}
 		if d.Settings, err = st.Settings(ctx, settingDefaults); err != nil {
@@ -499,6 +503,14 @@ func (a *App) onInventory() {
 }
 
 func (a *App) refreshPages() {
+	// Snapshot owns its windows; overlay application metadata without changing
+	// daemon identity or the inventory service's session-derived defaults.
+	for i := range a.snap.Windows {
+		w := &a.snap.Windows[i]
+		if project, ok := a.data.PaneProjects[w.Target.Key()]; ok {
+			w.Project = project
+		}
+	}
 	for _, p := range a.pages {
 		p.refresh(a.snap, a.data, a.active, a.active != "" || a.activeNone)
 	}

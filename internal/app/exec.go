@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/unixsuperhero/gmtm/internal/actions"
 	"github.com/unixsuperhero/gmtm/internal/domain"
 	"github.com/unixsuperhero/gmtm/internal/launch"
 	"github.com/unixsuperhero/gmtm/internal/live"
@@ -42,6 +43,12 @@ func (a *App) exec(id, targetID string) tea.Cmd {
 		return r.win, true
 	}
 	switch id {
+	case "pane.assign-project":
+		w, ok := needWin()
+		if !ok {
+			return nil
+		}
+		return a.openPaneProjectForm(*w)
 	case "note.new":
 		return a.openNote()
 	case "new.terminal", "new.agent", "new.vim":
@@ -141,12 +148,12 @@ func (a *App) exec(id, targetID string) tea.Cmd {
 		}
 		a.setActive(r.project)
 		return nil
-	case "context.open":
+	case "context.open", "note.open":
 		if !hasRow || r.item == nil {
 			return nil
 		}
 		return a.openSavedContext(*r.item)
-	case "context.reassociate":
+	case "context.reassociate", "note.reassociate":
 		if !hasRow || r.item == nil {
 			return nil
 		}
@@ -185,6 +192,9 @@ func (a *App) exec(id, targetID string) tea.Cmd {
 			return serverStartMsg{inv.Refresh(ctx)}
 		}
 	case "refresh":
+		if p.id == actions.PageNotes {
+			return a.loadStore()
+		}
 		return a.refreshCmd()
 	case "quit":
 		s := a.live
@@ -197,24 +207,16 @@ func (a *App) exec(id, targetID string) tea.Cmd {
 		}, tea.Quit)
 	case "page.next":
 		a.setPage((a.cur + 1) % len(a.pages))
-		if a.page().id == "context" {
-			return a.loadContextPage()
-		}
-		return nil
+		return a.loadPage()
 	case "page.prev":
 		a.setPage((a.cur + len(a.pages) - 1) % len(a.pages))
-		if a.page().id == "context" {
-			return a.loadContextPage()
-		}
-		return nil
+		return a.loadPage()
 	}
 	if strings.HasPrefix(id, "page.") {
 		for i, pg := range a.pages {
 			if "page."+pg.id == id {
 				a.setPage(i)
-				if pg.id == "context" {
-					return a.loadContextPage()
-				}
+				return a.loadPage()
 			}
 		}
 		return nil
@@ -237,6 +239,16 @@ func onOff(b bool) string {
 func (a *App) setPage(i int) {
 	a.cur = i
 	a.content = nil
+}
+
+func (a *App) loadPage() tea.Cmd {
+	switch a.page().id {
+	case actions.PageContext:
+		return a.loadContextPage()
+	case actions.PageNotes:
+		return a.loadStore()
+	}
+	return nil
 }
 
 func (a *App) setActive(project string) {

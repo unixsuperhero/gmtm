@@ -61,6 +61,11 @@ var migrations = []string{
 	// v2: lookup indexes
 	`CREATE INDEX idx_context_items_project ON context_items(project);
 	CREATE INDEX idx_context_tags_item ON context_tags(item_id);`,
+	// v3: metadata-only pane project overrides, including explicit no-project values.
+	`CREATE TABLE pane_projects(
+		target_key TEXT PRIMARY KEY,
+		project TEXT NOT NULL
+	);`,
 }
 
 // DefaultPath is $XDG_DATA_HOME/mtm/mtm.db or ~/.local/share/mtm/mtm.db.
@@ -326,6 +331,23 @@ func (s *sqlStore) keys(ctx context.Context, table string) (map[string]bool, err
 func (s *sqlStore) Pins(ctx context.Context) (map[string]bool, error)  { return s.keys(ctx, "pins") }
 func (s *sqlStore) Stars(ctx context.Context) (map[string]bool, error) { return s.keys(ctx, "stars") }
 
+func (s *sqlStore) PaneProjects(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT target_key, project FROM pane_projects`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var key, project string
+		if err := rows.Scan(&key, &project); err != nil {
+			return nil, err
+		}
+		out[key] = project
+	}
+	return out, rows.Err()
+}
+
 func (s *sqlStore) Settings(ctx context.Context, defaults map[string]string) ([]Setting, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM settings`)
 	if err != nil {
@@ -514,6 +536,11 @@ func (t *sqlTx) setKey(table, key string, on bool) error {
 
 func (t *sqlTx) SetPinned(k string, on bool) error  { return t.setKey("pins", k, on) }
 func (t *sqlTx) SetStarred(k string, on bool) error { return t.setKey("stars", k, on) }
+
+func (t *sqlTx) SetPaneProject(targetKey, project string) error {
+	_, err := t.exec(`INSERT INTO pane_projects(target_key, project) VALUES(?,?) ON CONFLICT(target_key) DO UPDATE SET project=excluded.project`, targetKey, project)
+	return err
+}
 
 func (t *sqlTx) SetSetting(key, value string) error {
 	_, err := t.exec(`INSERT INTO settings(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)

@@ -13,6 +13,7 @@ const (
 	PageProjects = "projects"
 	PageContext  = "context"
 	PageSettings = "settings"
+	PageNotes    = "notes"
 )
 
 // Defs is every mtm action. Keys are tea.KeyMsg strings; multi-key
@@ -37,6 +38,7 @@ func Defs() []Action {
 		{ID: "detail.prev", Verb: "Previous", Object: "Detail tab", Description: "Previous detail tab", Modes: n, Keys: []string{"shift+tab"}, Page: PagePanes},
 		{ID: "prompt.retry", Verb: "Retry", Object: "Prompt", Description: "Re-send the last failed prompt to its existing agent (no new launch)", Modes: n, Keys: []string{"R"}},
 		{ID: "context.save", Verb: "Save", Object: "Context", Description: "Save a context item from the selected window (project prefilled)", Modes: n, Keys: []string{"a"}, Page: PagePanes, NeedsTarget: true},
+		{ID: "pane.assign-project", Verb: "Assign", Object: "Pane project", Description: "Assign the selected pane to an existing or new project (metadata only; session unchanged)", Modes: n, Keys: []string{"A"}, Page: PagePanes, NeedsTarget: true},
 		{ID: "group.cycle", Verb: "Cycle", Object: "Grouping", Description: "Cycle grouping configurations", Modes: n, Keys: []string{"z"}},
 		{ID: "group.customize", Verb: "Customize", Object: "Grouping", Description: "Choose grouping fields, order and scope", Modes: n, Keys: []string{"Z"}},
 		{ID: "search", Verb: "Search", Description: "Search the current list", Modes: n, Keys: []string{"/"}},
@@ -54,12 +56,15 @@ func Defs() []Action {
 		{ID: "page.projects", Verb: "Go", Object: "Projects", Description: "Projects page", Modes: n, Keys: []string{"4"}},
 		{ID: "page.context", Verb: "Go", Object: "Context page", Description: "Saved context page", Modes: n, Keys: []string{"5"}},
 		{ID: "page.settings", Verb: "Go", Object: "Settings", Description: "Settings page", Modes: n, Keys: []string{"6"}},
+		{ID: "page.notes", Verb: "Open", Object: "Saved notes", Description: "Browse saved notes for the active project (all notes before selecting a project)", Modes: n, Keys: []string{"7"}},
 		{ID: "page.next", Verb: "Go", Object: "Next page", Description: "Next page", Modes: n, Keys: []string{"]"}},
 		{ID: "page.prev", Verb: "Go", Object: "Previous page", Description: "Previous page", Modes: n, Keys: []string{"["}},
 		{ID: "project.activate", Verb: "Activate", Object: "Project", Description: "Make the selected project the active project context", Modes: n, Keys: []string{"enter"}, Page: PageProjects, NeedsTarget: true},
 		{ID: "context.open", Verb: "Open", Object: "Context item", Description: "Open the selected saved item read-only in the main area", Modes: n, Keys: []string{"enter"}, Page: PageContext, NeedsTarget: true},
 		{ID: "context.reassociate", Verb: "Edit", Object: "Context project", Description: "Change the selected item's project association", Modes: n, Keys: []string{"e"}, Page: PageContext, NeedsTarget: true},
 		{ID: "context.clear", Verb: "Clear", Object: "Context project", Description: "Remove the selected item's project association (no-project)", Modes: n, Keys: []string{"D"}, Page: PageContext, NeedsTarget: true},
+		{ID: "note.open", Verb: "Open", Object: "Saved note", Description: "Read the selected saved note", Modes: n, Keys: []string{"enter"}, Page: PageNotes, NeedsTarget: true},
+		{ID: "note.reassociate", Verb: "Edit", Object: "Note project", Description: "Change the selected note's project association", Modes: n, Keys: []string{"e"}, Page: PageNotes, NeedsTarget: true},
 		{ID: "setting.edit", Verb: "Edit", Object: "Setting", Description: "Edit the selected setting", Modes: n, Keys: []string{"enter"}, Page: PageSettings, NeedsTarget: true},
 		{ID: "setting.reset", Verb: "Reset", Object: "Setting", Description: "Reset the selected setting to its default", Modes: n, Keys: []string{"r"}, Page: PageSettings, NeedsTarget: true},
 		{ID: "capture.setup", Verb: "Set up", Object: "Capture", Description: "Install terminal command/output and agent prompt/response capture", Modes: n, Page: PageSettings},

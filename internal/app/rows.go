@@ -50,12 +50,13 @@ func (r row) rowProject() string {
 
 // storeData is the application-owned state read from SQLite.
 type storeData struct {
-	Projects []domain.Project
-	Items    []domain.ContextItem
-	Pins     map[string]bool
-	Stars    map[string]bool
-	Settings []store.Setting
-	Err      error
+	Projects     []domain.Project
+	Items        []domain.ContextItem
+	Pins         map[string]bool
+	Stars        map[string]bool
+	PaneProjects map[string]string
+	Settings     []store.Setting
+	Err          error
 }
 
 func orNone(s string) string {
@@ -187,7 +188,7 @@ func hostRows(snap domain.Snapshot) []list.Item {
 	return out
 }
 
-// projectNames unions store projects and session-derived projects.
+// projectNames includes saved context so note-only projects remain discoverable.
 func projectNames(snap domain.Snapshot, d storeData) []string {
 	set := map[string]bool{}
 	for _, p := range d.Projects {
@@ -196,6 +197,16 @@ func projectNames(snap domain.Snapshot, d storeData) []string {
 	for _, s := range snap.Sessions {
 		if p := inventory.ProjectForSession(s.Name); p != "" {
 			set[p] = true
+		}
+	}
+	for _, project := range d.PaneProjects {
+		if project != "" {
+			set[project] = true
+		}
+	}
+	for _, item := range d.Items {
+		if item.Project != "" {
+			set[item.Project] = true
 		}
 	}
 	out := make([]string, 0, len(set))
@@ -215,16 +226,24 @@ func projectRows(snap domain.Snapshot, d storeData) []list.Item {
 	for _, it := range d.Items {
 		items[it.Project]++
 	}
-	stored := map[string]bool{}
+	sources := map[string]string{}
+	for _, session := range snap.Sessions {
+		sources[session.Project] = "session"
+	}
+	for _, project := range d.PaneProjects {
+		if sources[project] == "" {
+			sources[project] = "pane"
+		}
+	}
 	for _, p := range d.Projects {
-		stored[p.Name] = true
+		sources[p.Name] = "store"
 	}
 	out := []list.Item{row{id: "project|", isProj: true, label: fmt.Sprintf("%-20s windows:%-3d context:%-3d reserved (no ownership)", domain.SessionNoProject, count[""], items[""]),
 		search: domain.SessionNoProject, fields: map[string]string{"source": "reserved"}}}
 	for _, n := range projectNames(snap, d) {
-		src := "session"
-		if stored[n] {
-			src = "store"
+		src := sources[n]
+		if src == "" {
+			src = "context"
 		}
 		out = append(out, row{id: "project|" + n, isProj: true, project: n,
 			label:  fmt.Sprintf("%-20s windows:%-3d context:%-3d %s", n, count[n], items[n], src),
@@ -233,10 +252,13 @@ func projectRows(snap domain.Snapshot, d storeData) []list.Item {
 	return out
 }
 
-func contextRows(d storeData) []list.Item {
+func contextRows(d storeData, kind, project string, scoped bool) []list.Item {
 	var out []list.Item
 	for i := range d.Items {
 		it := d.Items[i]
+		if kind != "" && it.Kind != kind || scoped && it.Project != project {
+			continue
+		}
 		src := ""
 		if it.Source != nil {
 			src = it.Source.Session + "/" + it.Source.WindowID

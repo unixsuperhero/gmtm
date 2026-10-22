@@ -153,6 +153,91 @@ func TestPinsStars(t *testing.T) {
 	}
 }
 
+func TestPaneProjectsPersistAndIsolateTargets(t *testing.T) {
+	s, path := openT(t)
+	targets := []domain.Target{
+		{Server: "server", Host: "local", Session: "session", WindowID: "w1"},
+		{Server: "other", Host: "local", Session: "session", WindowID: "w1"},
+		{Server: "server", Host: "remote", Session: "session", WindowID: "w1"},
+		{Server: "server", Host: "local", Session: "other", WindowID: "w1"},
+		{Server: "server", Host: "local", Session: "session", WindowID: "w2"},
+	}
+	initial, err := s.PaneProjects(bg)
+	must(t, err)
+	if len(initial) != 0 {
+		t.Fatalf("initial overrides: %v", initial)
+	}
+	want := map[string]string{}
+	commit(t, s, func(tx Tx) {
+		must(t, tx.CreateProject(&domain.Project{Name: "alpha"}))
+		for _, target := range targets {
+			must(t, tx.SetPaneProject(target.Key(), "alpha"))
+			want[target.Key()] = "alpha"
+		}
+	})
+	commit(t, s, func(tx Tx) {
+		must(t, tx.CreateProject(&domain.Project{Name: "beta"}))
+		must(t, tx.SetPaneProject(targets[0].Key(), "beta"))
+		must(t, tx.SetPaneProject(targets[1].Key(), ""))
+	})
+	want[targets[0].Key()] = "beta"
+	want[targets[1].Key()] = ""
+	must(t, s.Close())
+	reopened, err := Open(path)
+	must(t, err)
+	defer reopened.Close()
+	got, err := reopened.PaneProjects(bg)
+	must(t, err)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("persisted overrides = %v, want %v", got, want)
+	}
+	if value, ok := got[targets[1].Key()]; !ok || value != "" {
+		t.Fatalf("explicit no-project override missing: %v", got)
+	}
+	absent := domain.Target{Server: "server", Host: "local", Session: "session", WindowID: "absent"}
+	if _, ok := got[absent.Key()]; ok {
+		t.Fatal("unassigned target has an override")
+	}
+}
+
+func TestPaneProjectsRollbackWithProjectCreation(t *testing.T) {
+	s, _ := openT(t)
+	existing := domain.Target{Server: "server", Host: "local", Session: "session", WindowID: "w1"}.Key()
+	added := domain.Target{Server: "server", Host: "local", Session: "session", WindowID: "w2"}.Key()
+	commit(t, s, func(tx Tx) { must(t, tx.SetPaneProject(existing, "")) })
+	tx, err := s.Begin(bg)
+	must(t, err)
+	defer tx.Rollback()
+	must(t, tx.CreateProject(&domain.Project{Name: "new", Tags: []string{"new-tag"}}))
+	must(t, tx.SetPaneProject(existing, "new"))
+	must(t, tx.SetPaneProject(added, "new"))
+	want := map[string]string{existing: ""}
+	staged, err := s.PaneProjects(bg)
+	must(t, err)
+	if !reflect.DeepEqual(staged, want) {
+		t.Fatalf("uncommitted overrides visible: %v", staged)
+	}
+	if err := tx.CreateProject(&domain.Project{Name: "new"}); err == nil {
+		t.Fatal("expected unique violation")
+	}
+	must(t, tx.Rollback())
+	got, err := s.PaneProjects(bg)
+	must(t, err)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("overrides after rollback = %v, want %v", got, want)
+	}
+	project, err := s.ProjectByName(bg, "new")
+	must(t, err)
+	if project != nil {
+		t.Fatalf("project survived rollback: %+v", project)
+	}
+	tags, err := s.FieldValues(bg, "tag")
+	must(t, err)
+	if len(tags) != 0 {
+		t.Fatalf("project tags survived rollback: %v", tags)
+	}
+}
+
 func TestSettings(t *testing.T) {
 	s, _ := openT(t)
 	d := map[string]string{"theme": "dark", "tick": "5"}
@@ -184,7 +269,7 @@ func TestMigrationPreservesData(t *testing.T) {
 	s, err := Open(p)
 	must(t, err)
 	defer s.Close()
-	if v, _ := s.SchemaVersion(bg); v != len(migrations) || v < 2 {
+	if v, _ := s.SchemaVersion(bg); v != len(migrations) {
 		t.Fatalf("v=%d", v)
 	}
 	if g, _ := s.ProjectByName(bg, "keep"); g == nil {
@@ -197,5 +282,13 @@ func TestMigrationPreservesData(t *testing.T) {
 	must(t, s.(*sqlStore).db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name='idx_context_items_project'`).Scan(&n))
 	if n != 1 {
 		t.Fatal("v2 index missing")
+	}
+	commit(t, s, func(tx Tx) {
+		must(t, tx.SetPaneProject("migrated-target", "keep"))
+	})
+	overrides, err := s.PaneProjects(bg)
+	must(t, err)
+	if !reflect.DeepEqual(overrides, map[string]string{"migrated-target": "keep"}) {
+		t.Fatalf("pane overrides after migration: %v", overrides)
 	}
 }

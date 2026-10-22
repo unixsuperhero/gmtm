@@ -147,6 +147,20 @@ func (a *App) openProjectChooser() tea.Cmd {
 	return nil
 }
 
+func (a *App) openPaneProjectForm(w domain.Window) tea.Cmd {
+	field := a.projectField("")
+	field.Default = nil
+	field.Hint = "current: " + orNone(w.Project) + "; choose or type a project; only metadata changes"
+	f, err := forms.New("pane-project", "Assign project · "+windowName(w), field)
+	if err != nil {
+		a.status = "form: " + err.Error()
+		return nil
+	}
+	a.assignTarget = w.Target
+	a.pushForm(f)
+	return nil
+}
+
 func (a *App) openSettingForm(s store.Setting) tea.Cmd {
 	f, err := forms.New("setting-"+s.Key, "Setting "+s.Key,
 		forms.Field{ID: "value", Label: s.Key, Kind: forms.Text, Required: true, Default: s.Value, Hint: "default: " + s.Default})
@@ -172,6 +186,14 @@ func (a *App) submit(m forms.SubmitMsg) tea.Cmd {
 	v := m.Values
 	layer := "form:" + m.FormID
 	switch {
+	case m.FormID == "pane-project":
+		target, project := a.assignTarget, projectValue(v["project"])
+		return a.tx("pane assigned to "+orNone(project)+" (session unchanged)", layer, func(tx store.Tx) error {
+			if err := stagedProjects(tx, m.Staged); err != nil {
+				return err
+			}
+			return tx.SetPaneProject(target.Key(), project)
+		})
 	case strings.HasPrefix(m.FormID, "create-"):
 		kind := domain.Kind(strings.TrimPrefix(m.FormID, "create-"))
 		spec := domain.LaunchSpec{Kind: kind, Host: str(v["host"]), Session: strings.TrimSpace(str(v["session"])), Project: projectValue(v["project"]),

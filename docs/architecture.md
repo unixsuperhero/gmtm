@@ -8,8 +8,8 @@ Spec: `~/hub/prompts/clean-mtm.md`. UI identity: **cmtm**. Binary: `mtm`. Server
 |---|---|---|
 | `internal/domain` | pure types: Target identity, Window/Session/Host snapshots, Project, ContextItem, Note, ConnState, enums | import anything but stdlib |
 | `internal/tuios` | socket client for an explicitly selected named or default daemon: path resolution, JSON-line RPC, subscribe stream, stream-pane frames, start/kill server via `tuios --server`, env scrubbing | know about UI or SQL |
-| `internal/inventory` | one shared snapshot built from daemon reads + events; project ownership derived from session name; reserved sessions `no-project`, `mtm-only`; stale/disconnected retention | draw anything |
-| `internal/store` | SQLite (modernc) with versioned migrations: projects, context items, notes, pins, stars, settings, field values; transactional | know about TUIOS |
+| `internal/inventory` | one shared snapshot built from daemon reads + events; default project ownership derived from session name; reserved sessions `no-project`, `mtm-only`; stale/disconnected retention | draw anything |
+| `internal/store` | SQLite (modernc) with versioned migrations: projects, pane project overrides, context items, notes, pins, stars, settings, field values; transactional | know about TUIOS |
 | `internal/contextsvc` | reference extraction and attributed, deduplicated persistence for URL/file/directory/document context; local path classification only | fetch URLs, execute references, or inspect remote paths locally |
 | `internal/actions` | action registry: ids, verbs, default bindings, remaps, conflict detection; palette/help/CLI all read it | execute UI code directly |
 | `internal/preview` | read-only capture → rendered cells via `x/vt`; sanitises OSC/clipboard/title; cached/stale labelling; generation guard | send input or leases |
@@ -25,6 +25,7 @@ Spec: `~/hub/prompts/clean-mtm.md`. UI identity: **cmtm**. Binary: `mtm`. Server
 - `store.Store` interface (internal/store/store.go).
 - `actions.Registry` (internal/actions/registry.go).
 - UI modules expose `tea.Model`-style components plus typed messages; the orchestrator only forwards.
+- Pane project overrides are keyed by `Target.Key()` (server, host, session, window ID); an empty stored value explicitly means no-project. The app overlays them on its owned snapshot before building views or collecting context, never mutating the daemon snapshot or target identity. Assignment and new-project creation share one transaction; sessions retain their original project defaults.
 
 ## Modes
 normal | insert | live | jump | context | palette | help | note. Key routing: F4 (New note) is reserved before any mode routing. Live leader default Ctrl+a.

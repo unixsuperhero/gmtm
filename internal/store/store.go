@@ -33,6 +33,8 @@ type Tx interface {
 	AddFieldValue(field, value string) error
 	SetPinned(targetKey string, pinned bool) error
 	SetStarred(targetKey string, starred bool) error
+	// SetPaneProject stores an override by Target.Key(); "" explicitly means no project.
+	SetPaneProject(targetKey, project string) error
 	SetSetting(key, value string) error
 	ResetSetting(key string) error
 	Commit() error
@@ -49,6 +51,8 @@ type Store interface {
 	FieldValues(ctx context.Context, field string) ([]string, error)
 	Pins(ctx context.Context) (map[string]bool, error)
 	Stars(ctx context.Context) (map[string]bool, error)
+	// PaneProjects returns overrides; an absent key inherits inventory metadata.
+	PaneProjects(ctx context.Context) (map[string]string, error)
 	Settings(ctx context.Context, defaults map[string]string) ([]Setting, error)
 	SchemaVersion(ctx context.Context) (int, error)
 	Close() error

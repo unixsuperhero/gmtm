@@ -34,19 +34,29 @@ server called `default`. Use `bin/mtm -d server` to inspect its connection or
 | `N t` / `N a` / `N v` | same via editable form |
 | `i` | live mode on selected pane (leader `ctrl+a`: `d` detach, `n`/`p` next/prev, `?` help, `ctrl+a` literal) |
 | `P` | set active project; type an existing or new name, then `Ctrl+S` to submit (new projects are created only on submit; cancel creates nothing) |
+| `A` | assign selected pane to an existing or new project; `Ctrl+S` saves metadata only (session and process unchanged) |
 | `x` | close (confirm) · `p` pin · `s` star · `a` save context |
 | `/` search · `z` cycle grouping · `Z` customize grouping · `C` clear |
 | `:` / `ctrl+p` | palette · `?` help · `J` jump · `C`ontext · `M` meta-mode |
 | `F4` | New note (global, every mode) · `ctrl+s` saves · `ctrl+o` in path fields opens the fd picker |
-| `1`–`6` `[` `]` | pages: Panes, Sessions, Hosts, Projects, Context, Settings |
+| `1`–`7` `[` `]` | pages: Panes, Sessions, Hosts, Projects, Context, Settings, Notes |
 
 Panes are scoped to the active (pinned) project after choosing one with `P`,
 activating it from Projects, or starting with `--project`. Switching projects
 updates the pane list immediately; choosing `no-project` shows only unowned panes.
-Before a project is chosen, Panes shows all projects. Other pages remain unscoped.
+Before a project is chosen, Panes and Notes show all projects. Other pages remain unscoped.
 Quick-create always uses the pinned project, including when its pane list is empty
 or another project's row is selected. Create forms default to the pinned project;
 their project field remains explicitly editable.
+
+To assign a terminal, Vim, or agent pane, select it on Panes and press `A`.
+Choose an existing project or type a new name, then `Ctrl+S`; choose `no-project`
+to clear ownership. New projects and assignments are saved together, only on
+submit. Assignment persists in the local database and overrides session-derived
+ownership without moving the pane, restarting its process, or changing TUIOS.
+The active project stays unchanged, so a reassigned pane disappears from its old
+project filter; use `P` to view its destination project. Project counts and newly
+saved context use the assignment; existing saved context keeps its own association.
 
 The **Screen** detail tab refreshes the selected pane's current screen automatically,
 250 ms after each capture completes. It does not require keyboard input and does
@@ -68,6 +78,20 @@ URLs are not fetched or opened automatically. Remote paths are retained as
 references but never read from the local filesystem. Extraction runs on Context
 entry, not continuously, and reports unavailable history/capture without hiding
 previously saved references.
+
+### Saved notes
+
+Press `7` (or choose **Open Saved notes** in the palette) to browse saved notes.
+Use `P` to select a project; Notes shows only that project's notes, or unassigned
+notes when `no-project` is selected. Before choosing a project, it shows all notes.
+Projects found only in saved notes remain available even with no running panes.
+
+`Enter` opens the selected note read-only; `Esc` returns to the list. `/` searches
+titles and note text. `e` changes the note's project association, including
+`no-project`, using the existing project form. `Ctrl+R` reloads saved notes.
+`F4` creates a note associated with the active project; `Ctrl+S` saves it.
+Notes remain in the local database across app restarts and also appear in Context.
+
 
 ### Single-line editing
 
