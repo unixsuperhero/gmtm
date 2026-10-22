@@ -83,7 +83,9 @@ func newPages() []*page {
 		lst:    list.New([]list.FieldDef{fd("kind", true), fd("project", true), fd("tags", true), {Name: "title", Sortable: true}}),
 		build:  func(_ domain.Snapshot, d storeData) []list.Item { return contextRows(d) },
 		detail: func(a *App, w, h int) string { return a.contextDetail(w, h) },
-		empty:  func(*App) string { return "No saved context yet. Save from a window with 'a' or press F4 for a note." }}
+		empty: func(*App) string {
+			return "No context references found in captured output. Open Context to extract again, save from a window with 'a', or press F4 for a note."
+		}}
 	ctx.lst = ctx.lst.SetGroupConfigs([]list.GroupConfig{{Name: "none"}, {Name: "by project", Fields: []string{"project"}}, {Name: "by kind", Fields: []string{"kind"}}})
 	settings := &page{id: actions.PageSettings, title: "Settings",
 		lst:   list.New([]list.FieldDef{fd("state", true)}),

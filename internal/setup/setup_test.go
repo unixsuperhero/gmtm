@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/unixsuperhero/gmtm/internal/tuios"
 )
 
 func testManager(t *testing.T, home, server string) *Manager {
@@ -47,7 +49,7 @@ func TestInstallIdempotentAndReversible(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(data), "__SERVER__") || strings.Contains(string(data), "__BINARY__") || strings.Contains(string(data), "__DB__") {
+		if strings.Contains(string(data), "__SERVER__") || strings.Contains(string(data), "__DAEMON_SERVER__") || strings.Contains(string(data), "__BINARY__") || strings.Contains(string(data), "__DB__") {
 			t.Fatalf("unexpanded template: %s", f.path)
 		}
 		if f.rc != "" {
@@ -192,7 +194,7 @@ func TestSetupIsolatedHomeIgnoresOMPOverrides(t *testing.T) {
 func TestSetupPinsServerAndAbsoluteRuntime(t *testing.T) {
 	m := testManager(t, t.TempDir(), "cmt-pin")
 	omp := m.files[0].source
-	for _, want := range []string{`"server":"cmt-pin"`, `process.env.TUIOS_SERVER !== capture.server`, `"--server", capture.server`, `"capture", "record"`, `state: "interrupted"`, `last.stopReason === "error"`} {
+	for _, want := range []string{`"server":"cmt-pin"`, `"--server", capture.server`, `"capture", "record"`, `state: "interrupted"`, `last.stopReason === "error"`} {
 		if !strings.Contains(omp, want) {
 			t.Errorf("extension missing %q", want)
 		}
@@ -205,6 +207,34 @@ func TestSetupPinsServerAndAbsoluteRuntime(t *testing.T) {
 	for _, server := range []string{"", "bad/server", "waytoolongservername"} {
 		if _, err := New(Options{Server: server}); err == nil {
 			t.Fatalf("accepted invalid server %q", server)
+		}
+	}
+}
+
+func TestDefaultSetupCoexistsWithNamedDefault(t *testing.T) {
+	home := t.TempDir()
+	unnamed := testManager(t, home, tuios.DefaultDaemon)
+	named := testManager(t, home, "default")
+	for i, f := range unnamed.files {
+		if f.path == named.files[i].path || !strings.Contains(f.path, tuios.DefaultDaemon) {
+			t.Fatalf("default identity collided: %s", f.path)
+		}
+	}
+	for _, m := range []*Manager{unnamed, named} {
+		if _, err := m.Install(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := unnamed.Uninstall(); err != nil {
+		t.Fatal(err)
+	}
+	items, err := named.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Status != "installed" {
+			t.Fatalf("named default damaged: %+v", item)
 		}
 	}
 }

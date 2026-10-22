@@ -69,8 +69,11 @@ func TestAgentOutcomes(t *testing.T) {
 		if !strings.Contains(p.Agent, "--model gpt-5") || !strings.Contains(p.Agent, "model_reasoning_effort=high") {
 			t.Fatalf("agent %q", p.Agent)
 		}
-		if len(p.Env) != 2 || p.Env["PATH"] != "/custom/bin:/usr/bin" || p.Env["TUIOS_SERVER"] != "clean-mtm" {
+		if len(p.Env) != 1 || p.Env["PATH"] != "/custom/bin:/usr/bin" {
 			t.Fatalf("env %v", p.Env)
+		}
+		if _, exists := p.Env["TUIOS_SERVER"]; exists {
+			t.Fatal("agent launch overrides daemon-owned TUIOS_SERVER")
 		}
 		if tc.queue == (p.Prompt != "") {
 			t.Fatalf("prompt sent %q with queue=%v", p.Prompt, tc.queue)

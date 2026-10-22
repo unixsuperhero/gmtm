@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 const capture = { bin: "", db: "", server: "", tuios: "" };
+// Capture identity is distinct from the native unnamed daemon's empty server.
+const daemonServer = capture.server === "@default" ? "" : capture.server;
 
 type Turn = {
   id: string; server: string; host: string; session: string; window: string;
@@ -20,7 +22,7 @@ type Report = {
 
 function run(bin: string, args: string[], input?: string): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<void>();
-  const env: NodeJS.ProcessEnv = { ...process.env, TUIOS_SERVER: capture.server };
+  const env: NodeJS.ProcessEnv = { ...process.env, TUIOS_SERVER: daemonServer };
   delete env.TUIOS_SOCKET;
   const child = spawn(bin, args, {
     env, stdio: [input === undefined ? "ignore" : "pipe", "ignore", "pipe"],
@@ -36,8 +38,8 @@ function run(bin: string, args: string[], input?: string): Promise<void> {
 }
 
 export default function (pi: ExtensionAPI) {
-  // Never infer a server from a pane id, socket, or default daemon.
-  if (process.env.TUIOS_SERVER !== capture.server || !process.env.TUIOS_PANE_ID || !process.env.TUIOS_SESSION) return;
+  // Activate only in a pane of the explicitly selected daemon.
+  if ((process.env.TUIOS_SERVER ?? "") !== daemonServer || !process.env.TUIOS_PANE_ID || !process.env.TUIOS_SESSION) return;
   const session = process.env.TUIOS_SESSION;
   const window = process.env.TUIOS_PANE_ID;
   const main = (ctx: ExtensionContext) => ctx.mode === "tui" && ctx.agent.kind === "main";
@@ -58,7 +60,7 @@ export default function (pi: ExtensionAPI) {
       agent_session_id: ctx.sessionManager.getSessionId(),
       transcript_path: ctx.sessionManager.getSessionFile(), ...payload,
     };
-    pending = pending.then(() => run(capture.tuios, ["--server", capture.server, "call", "set-agent-state", JSON.stringify(params)]))
+    pending = pending.then(() => run(capture.tuios, ["--server", daemonServer, "call", "set-agent-state", JSON.stringify(params)]))
       .catch(error => { ctx.ui.notify(`gmtm state report failed: ${String(error)}`, "warning"); });
     return pending;
   }

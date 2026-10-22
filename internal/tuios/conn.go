@@ -37,7 +37,7 @@ type Options struct {
 	MaxIdle int
 }
 
-// New returns a client for the named server. The name is mandatory.
+// New returns a client for a named server or the explicit DefaultDaemon selector.
 func New(serverName string) (Client, error) { return NewWithOptions(serverName, Options{}) }
 
 // NewWithOptions is New with explicit options.
@@ -372,7 +372,11 @@ func (c *client) KillServer(ctx context.Context) error {
 }
 
 func (c *client) runTuios(ctx context.Context, sub string) error {
-	cmd := exec.CommandContext(ctx, c.opt.Binary, "--server", c.name, sub)
+	name := c.name
+	if name == DefaultDaemon {
+		name = ""
+	}
+	cmd := exec.CommandContext(ctx, c.opt.Binary, "--server", name, sub)
 	cmd.Env = c.ChildEnv()
 	var out bytes.Buffer
 	cmd.Stdout = &out

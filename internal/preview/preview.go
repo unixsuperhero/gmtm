@@ -40,8 +40,9 @@ const (
 
 // Opts for one capture.
 type Opts struct {
-	Lines  int  // recent lines to keep (default 200, max 2000)
-	Styled bool // keep SGR styling in Rendered
+	Lines   int  // recent lines to keep (default 200, max 2000)
+	Styled  bool // keep SGR styling in Rendered
+	Visible bool // capture the current screen instead of recent scrollback
 }
 
 // ResultMsg is the outcome of one capture; deliver through Tracker.Accept.
@@ -94,7 +95,7 @@ func (s *Service) CaptureSync(ctx context.Context, target domain.Target, gen uin
 	res.AltScreen = boolField(win, "alt_screen") || boolField(win, "alternate_screen")
 
 	params := map[string]any{"session": target.Session, "window": target.WindowID, "styled": true}
-	if res.AltScreen {
+	if opts.Visible || res.AltScreen {
 		params["source"] = "visible"
 	} else {
 		params["source"] = "recent"
@@ -125,7 +126,7 @@ func (s *Service) CaptureSync(ctx context.Context, target domain.Target, gen uin
 		lines = lines[len(lines)-opts.Lines:]
 		res.Truncated = true
 	}
-	if !res.AltScreen && len(lines) >= opts.Lines && cp.HistoryRows+res.Rows > len(lines) {
+	if !opts.Visible && !res.AltScreen && len(lines) >= opts.Lines && cp.HistoryRows+res.Rows > len(lines) {
 		res.Truncated = true
 	}
 	res.Truncated = res.Truncated || cp.Truncated

@@ -122,8 +122,11 @@ type retryInfo struct {
 }
 
 // messages
+const screenRefreshInterval = 250 * time.Millisecond
+
 type (
 	invMsg         struct{}
+	screenTickMsg  struct{}
 	refreshDoneMsg struct{ err error }
 	storeMsg       struct{ d storeData }
 	statusMsg      struct{ text string }
@@ -417,6 +420,13 @@ func (a *App) update(msg tea.Msg) tea.Cmd {
 		a.applySettings()
 		a.refreshPages()
 		return nil
+	case contextLoadedMsg:
+		a.data.Items = m.items
+		a.refreshPages()
+		if m.note != "" {
+			a.status = m.note
+		}
+		return nil
 	case statusMsg:
 		a.status = m.text
 		return nil
@@ -432,8 +442,11 @@ func (a *App) update(msg tea.Msg) tea.Cmd {
 		if a.tracker.Accept(m) {
 			r := a.cache.Resolve(m)
 			a.shot, a.inFlight, a.lastShot = &r, false, time.Now()
+			return tea.Tick(screenRefreshInterval, func(time.Time) tea.Msg { return screenTickMsg{} })
 		}
 		return nil
+	case screenTickMsg:
+		return nil // Update's syncDetail captures again when the screen is visible.
 	case activityMsg:
 		if m.gen == a.actGen {
 			a.activity = m.text
@@ -566,20 +579,25 @@ func (a *App) selectedWindow() (*domain.Window, bool) {
 }
 
 func (a *App) syncDetail() tea.Cmd {
-	if a.cur != 0 || a.live != nil {
+	if a.cur != 0 || a.live != nil || a.liveStarting || a.content != nil || !a.modals.Empty() {
+		a.lastShot = time.Time{}
 		return nil
 	}
 	w, ok := a.selectedWindow()
 	if !ok {
+		a.lastShot = time.Time{}
 		return nil
 	}
 	p := a.panes()
+	if paneTabs[p.tab] != "Screen" {
+		a.lastShot = time.Time{}
+	}
 	switch paneTabs[p.tab] {
 	case "Transcript", "Turns":
 		return a.syncCapturedDetail(*w)
 	case "Screen":
 		cur, _ := a.tracker.Current()
-		stale := cur.Key() != w.Target.Key() || (!a.inFlight && time.Since(a.lastShot) > 2*time.Second)
+		stale := cur.Key() != w.Target.Key() || (!a.inFlight && time.Since(a.lastShot) >= screenRefreshInterval)
 		if !stale || (a.inFlight && cur.Key() == w.Target.Key()) {
 			return nil
 		}
@@ -588,7 +606,7 @@ func (a *App) syncDetail() tea.Cmd {
 		if a.shot != nil && a.shot.Target.Key() != w.Target.Key() {
 			a.shot = nil
 		}
-		return a.prev.Capture(context.Background(), w.Target, gen, preview.Opts{Lines: preview.DefaultLines, Styled: true})
+		return a.prev.Capture(context.Background(), w.Target, gen, preview.Opts{Lines: preview.MaxLines, Styled: true, Visible: true})
 	case "Activity":
 		if a.actTarget == w.Target.Key() {
 			return nil

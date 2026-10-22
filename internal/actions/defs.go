@@ -44,7 +44,7 @@ func Defs() []Action {
 		{ID: "palette", Verb: "Open", Object: "Palette", Description: "Command palette (verb-first and object-first)", Modes: n, Keys: []string{":", "ctrl+p"}},
 		{ID: "help", Verb: "Open", Object: "Help", Description: "Help generated from effective bindings", Modes: n, Keys: []string{"?"}},
 		{ID: "jump", Verb: "Open", Object: "Jump", Description: "Jump mode: outline of the selected agent/terminal with preview", Modes: n, Keys: []string{"J"}},
-		{ID: "context", Verb: "Open", Object: "Context", Description: "Context mode: files, docs and saved project context", Modes: n, Keys: []string{"C"}},
+		{ID: "context", Verb: "Open", Object: "Context", Description: "Extract URLs, files and docs from pane context; browse saved project references", Modes: n, Keys: []string{"C"}},
 		{ID: "metamode", Verb: "Open", Object: "Modes", Description: "Meta-mode selector listing Jump, Context and Project context", Modes: n, Keys: []string{"M"}},
 		{ID: "note.new", Verb: "New", Object: "Note", Description: "New project note from anywhere (reserved before mode routing)", Modes: g, Keys: []string{"f4"}},
 		{ID: "project.choose", Verb: "Choose", Object: "Active project", Description: "Set the active project context (or no-project)", Modes: n, Keys: []string{"P"}},

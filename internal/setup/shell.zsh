@@ -1,6 +1,6 @@
 # GMTM_SETUP_ID=zsh
 # OSC 133 boundaries and durable history for the selected TUIOS server.
-[[ -o interactive && ${TUIOS_SERVER-} == __SERVER__ && -n ${TUIOS_PANE_ID-} && -n ${TUIOS_SESSION-} ]] || return 0
+[[ -o interactive && ${TUIOS_SERVER-} == __DAEMON_SERVER__ && -n ${TUIOS_PANE_ID-} && -n ${TUIOS_SESSION-} ]] || return 0
 [[ -z ${_GMTM_OSC133_INSTALLED-} ]] || return 0
 _GMTM_OSC133_INSTALLED=1
 autoload -Uz add-zsh-hook

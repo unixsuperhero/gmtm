@@ -188,6 +188,8 @@ func (h *harness) drain(cmd tea.Cmd, depth int) {
 	case msg := <-ch:
 		switch m := msg.(type) {
 		case nil:
+		case screenTickMsg:
+			// Continuous screen refresh is exercised explicitly, not recursively.
 		case tea.BatchMsg:
 			for _, c := range m {
 				h.drain(c, depth+1)
@@ -564,5 +566,49 @@ func TestCreationUsesPinnedProject(t *testing.T) {
 	requests = h.requests("new-window")
 	if len(requests) != 2 || !strings.Contains(requests[1], `"session":"pinned"`) {
 		t.Fatalf("selected session overrode pinned project: %v", requests)
+	}
+}
+
+func TestScreenRefreshesWithoutInput(t *testing.T) {
+	h := newHarness(t, [3]string{"web", "w1", "terminal"})
+	h.d.Handle("get-window", tuiostest.Result(map[string]any{"width": 80, "height": 24}))
+	setScreen := func(text string) {
+		h.d.Handle("capture-pane", func(p json.RawMessage) (any, *tuios.Error) {
+			var q struct{ Source string }
+			_ = json.Unmarshal(p, &q)
+			if q.Source != "visible" {
+				return map[string]any{"content": "old scrollback"}, nil
+			}
+			return map[string]any{"content": text}, nil
+		})
+	}
+	setScreen("screen-before")
+	h.a.lastShot = time.Time{}
+	first := h.a.syncDetail()
+	if first == nil {
+		t.Fatal("screen capture not scheduled")
+	}
+	next := h.a.update(first())
+	if !strings.Contains(h.a.View(), "screen-before") {
+		t.Fatal("initial screen missing")
+	}
+	setScreen("screen-after")
+	if next == nil {
+		t.Fatal("screen did not schedule its own refresh")
+	}
+	// Run the real timer, then deliver it without a keyboard/inventory event.
+	_, capture := h.a.Update(next())
+	h.run(capture)
+	if !strings.Contains(h.a.View(), "screen-after") || strings.Contains(h.a.View(), "screen-before") {
+		t.Fatal("screen did not update without input")
+	}
+	h.a.setPage(1)
+	h.a.lastShot = time.Time{}
+	if cmd := h.a.syncDetail(); cmd != nil {
+		t.Fatal("hidden screen kept capturing")
+	}
+	h.a.setPage(0)
+	if cmd := h.a.syncDetail(); cmd == nil {
+		t.Fatal("returning to screen did not resume capture")
 	}
 }

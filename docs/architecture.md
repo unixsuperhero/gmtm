@@ -1,15 +1,16 @@
 # mtm architecture (modular, thin orchestration)
 
-Spec: `~/hub/prompts/clean-mtm.md`. UI identity: **cmtm**. Binary: `mtm`. Server: `clean-mtm`.
+Spec: `~/hub/prompts/clean-mtm.md`. UI identity: **cmtm**. Binary: `mtm`. Server: `clean-mtm` unless explicitly overridden with `--server NAME` or `-d` / `--default`.
 
 ## Packages (each independently buildable and testable)
 
 | package | owns | must not |
 |---|---|---|
 | `internal/domain` | pure types: Target identity, Window/Session/Host snapshots, Project, ContextItem, Note, ConnState, enums | import anything but stdlib |
-| `internal/tuios` | socket client for a *named* server: path resolution, JSON-line RPC, subscribe stream, stream-pane frames, start/kill server via `tuios --server`, env scrubbing | know about UI or SQL |
+| `internal/tuios` | socket client for an explicitly selected named or default daemon: path resolution, JSON-line RPC, subscribe stream, stream-pane frames, start/kill server via `tuios --server`, env scrubbing | know about UI or SQL |
 | `internal/inventory` | one shared snapshot built from daemon reads + events; project ownership derived from session name; reserved sessions `no-project`, `mtm-only`; stale/disconnected retention | draw anything |
 | `internal/store` | SQLite (modernc) with versioned migrations: projects, context items, notes, pins, stars, settings, field values; transactional | know about TUIOS |
+| `internal/contextsvc` | reference extraction and attributed, deduplicated persistence for URL/file/directory/document context; local path classification only | fetch URLs, execute references, or inspect remote paths locally |
 | `internal/actions` | action registry: ids, verbs, default bindings, remaps, conflict detection; palette/help/CLI all read it | execute UI code directly |
 | `internal/preview` | read-only capture → rendered cells via `x/vt`; sanitises OSC/clipboard/title; cached/stale labelling; generation guard | send input or leases |
 | `internal/live` | live stream session: stream-pane with lease, leader key state machine, detach | touch inventory |

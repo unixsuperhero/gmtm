@@ -62,3 +62,23 @@ func TestScrubEnv(t *testing.T) {
 		t.Fatalf("got %v want %v", got, want)
 	}
 }
+
+func TestExplicitDefaultDaemon(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/xdg")
+	t.Setenv("TUIOS_SOCKET", "/wrong/socket")
+	t.Setenv("TUIOS_SERVER", "other")
+	c, err := New(DefaultDaemon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SocketPath() != "/xdg/tuios/tuios.sock" {
+		t.Fatalf("default socket %q", c.SocketPath())
+	}
+	if ServerSocketPath("/xdg/tuios", "default") == c.SocketPath() {
+		t.Fatal("named default server collided with unnamed daemon")
+	}
+	env := ScrubEnv([]string{"PATH=/bin", "TUIOS_SERVER=other", "TUIOS_SOCKET=/wrong/socket"}, DefaultDaemon)
+	if !slices.Equal(env, []string{"PATH=/bin", "TUIOS_SERVER="}) {
+		t.Fatalf("default daemon inherited routing: %v", env)
+	}
+}

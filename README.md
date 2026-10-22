@@ -1,13 +1,14 @@
 # mtm (UI identity: cmtm)
 
 Project-based TUIOS workspace manager built from the clean-room spec in `~/hub/prompts/clean-mtm.md`.
-Go + Bubble Tea. Always talks to the dedicated TUIOS server **clean-mtm**; never the default daemon.
+Go + Bubble Tea. Uses the dedicated TUIOS server **clean-mtm** by default; `-d` selects the normal TUIOS daemon.
 
 ## Run
 
 ```sh
 go build -o bin/mtm ./cmd/mtm
 bin/mtm                 # TUI (default)   flags: --server NAME --db PATH --project NAME
+bin/mtm -d              # use the default TUIOS daemon (also --default)
 bin/mtm server          # selected server, socket path, answering?
 bin/mtm json file.json  # built-in JSON explorer (no file + TTY → fuzzy path picker)
 bin/mtm actions         # every action and its effective keys
@@ -15,6 +16,15 @@ bin/mtm help
 ```
 
 Unknown first words run `mtm-<word>` from PATH (unique prefix allowed: `mtm dep` → `mtm-deploy`).
+
+Agent creation defaults to `omp` when installed, then falls back to `claude`,
+`codex`, or `gemini`. The editable agent form can select a different harness.
+
+`-d` / `--default` cannot be combined with `--server NAME`. Selection is explicit:
+inherited `TUIOS_SOCKET` and `TUIOS_SERVER` never redirect mtm. The default daemon
+uses identity `@default` in status and capture records, distinct from a named
+server called `default`. Use `bin/mtm -d server` to inspect its connection or
+`bin/mtm -d setup` to install capture hooks for it.
 
 ## Keys (normal mode)
 
@@ -37,6 +47,27 @@ Before a project is chosen, Panes shows all projects. Other pages remain unscope
 Quick-create always uses the pinned project, including when its pane list is empty
 or another project's row is selected. Create forms default to the pinned project;
 their project field remains explicitly editable.
+
+The **Screen** detail tab refreshes the selected pane's current screen automatically,
+250 ms after each capture completes. It does not require keyboard input and does
+not show scrollback. Refresh pauses while hidden, behind a modal, or in interactive
+live mode. Screen viewing never changes pane focus, sends input, or resizes it.
+
+Opening **Context** (`C`) extracts HTTP(S) URLs and file/directory references from
+the selected pane's captured commands, output, prompts, responses, and recent
+screen content. `.md` and `.markdown` references appear as documents. Opening the
+Context page (`5`) extracts from panes belonging to the pinned project.
+
+References are saved with their source pane and project, tagged `extracted`, and
+deduplicated on subsequent opens. Existing titles, notes, and edited project
+associations are preserved. Relative paths use the pane's reported working
+directory; quoted paths with spaces and Markdown links are supported.
+
+Local files/documents have read-only previews and directories can be browsed.
+URLs are not fetched or opened automatically. Remote paths are retained as
+references but never read from the local filesystem. Extraction runs on Context
+entry, not continuously, and reports unavailable history/capture without hiding
+previously saved references.
 
 ### Single-line editing
 

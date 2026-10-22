@@ -1,5 +1,5 @@
 // Package tuios is the only module that speaks the TUIOS daemon protocol.
-// Every client targets exactly one named server; there is no default-server path.
+// Every client targets one explicitly selected named or default daemon.
 package tuios
 
 import (

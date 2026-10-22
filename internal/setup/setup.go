@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/unixsuperhero/gmtm/internal/capture"
+	"github.com/unixsuperhero/gmtm/internal/tuios"
 )
 
 //go:embed omp.ts
@@ -46,8 +47,8 @@ type managedFile struct {
 type Manager struct{ files []managedFile }
 
 func New(opts Options) (*Manager, error) {
-	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,14}$`).MatchString(opts.Server) {
-		return nil, fmt.Errorf("setup requires an explicit named TUIOS server (1-14 of A-Za-z0-9_-)")
+	if opts.Server != tuios.DefaultDaemon && !regexp.MustCompile(`^[A-Za-z0-9_-]{1,14}$`).MatchString(opts.Server) {
+		return nil, fmt.Errorf("setup requires @default or a named TUIOS server (1-14 of A-Za-z0-9_-)")
 	}
 	if opts.Home == "" {
 		opts.Home = os.Getenv("GMTM_SETUP_HOME")
@@ -118,12 +119,16 @@ func New(opts Options) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	daemonServer := opts.Server
+	if daemonServer == tuios.DefaultDaemon {
+		daemonServer = ""
+	}
 	config, err := json.Marshal(map[string]string{"bin": opts.Binary, "db": opts.DB, "server": opts.Server, "tuios": tuiosPath})
 	if err != nil {
 		return nil, err
 	}
 	omp := strings.Replace(ompSource, `const capture = { bin: "", db: "", server: "", tuios: "" };`, "const capture = "+string(config)+";", 1)
-	replacer := strings.NewReplacer("__SERVER__", shellQuote(opts.Server), "__BINARY__", shellQuote(opts.Binary), "__DB__", shellQuote(opts.DB))
+	replacer := strings.NewReplacer("__SERVER__", shellQuote(opts.Server), "__DAEMON_SERVER__", shellQuote(daemonServer), "__BINARY__", shellQuote(opts.Binary), "__DB__", shellQuote(opts.DB))
 	root := filepath.Join(opts.Home, ".config", "gmtm", "setup", opts.Server)
 	m := &Manager{files: []managedFile{
 		{id: "omp", path: filepath.Join(agent, "extensions", "gmtm-omp-"+opts.Server+".ts"), source: omp, marker: "// GMTM_SETUP_ID=omp\n", detail: "OMP full prompts/responses, errors and interruptions; restart OMP. Other agent harnesses are not supported."},

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/unixsuperhero/gmtm/internal/actions"
+	"github.com/unixsuperhero/gmtm/internal/tuios"
 	"github.com/unixsuperhero/gmtm/internal/ui/jsonexplorer"
 	"github.com/unixsuperhero/gmtm/internal/ui/pathpicker"
 )
@@ -71,7 +72,11 @@ func ScrubbedEnv(env []string, server string) []string {
 			out = append(out, kv)
 		}
 	}
-	return append(out, "TUIOS_SERVER="+server, "MTM_SERVER="+server)
+	tuiosServer := server
+	if server == tuios.DefaultDaemon {
+		tuiosServer = ""
+	}
+	return append(out, "TUIOS_SERVER="+tuiosServer, "MTM_SERVER="+server)
 }
 
 type global struct {
@@ -90,6 +95,9 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(bin, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&g.server, "server", DefaultServer, "")
+	var useDefault bool
+	fs.BoolVar(&useDefault, "default", false, "")
+	fs.BoolVar(&useDefault, "d", false, "")
 	fs.StringVar(&g.db, "db", "", "")
 	fs.StringVar(&g.project, "project", "", "")
 	fs.BoolVar(&g.json, "json", false, "")
@@ -100,7 +108,19 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return fail(stderr, bin, "%v (try '%s help')", err, bin)
 	}
-	if !serverRe.MatchString(g.server) {
+	serverSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "server" {
+			serverSet = true
+		}
+	})
+	if useDefault && serverSet {
+		return fail(stderr, bin, "--default/-d cannot be combined with --server")
+	}
+	if useDefault {
+		g.server = tuios.DefaultDaemon
+	}
+	if g.server != tuios.DefaultDaemon && !serverRe.MatchString(g.server) {
 		return fail(stderr, bin, "invalid --server %q: use 1-14 characters from A-Z a-z 0-9 _ -", g.server)
 	}
 	rest := fs.Args()
@@ -266,7 +286,7 @@ func SocketPath(server string) string {
 			base = fmt.Sprintf("/tmp/tuios-%d", uid)
 		}
 	}
-	return filepath.Join(base, "servers", server, "tuios.sock")
+	return tuios.ServerSocketPath(base, server)
 }
 
 func (e *runEnv) server(rest []string) int {

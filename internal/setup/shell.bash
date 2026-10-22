@@ -1,6 +1,6 @@
 # GMTM_SETUP_ID=bash
 # OSC 133 marks for the selected TUIOS server only; bash 4.4+.
-[[ $- == *i* && ${TUIOS_SERVER-} == __SERVER__ && -n ${TUIOS_PANE_ID-} && -n ${TUIOS_SESSION-} ]] || return 0
+[[ $- == *i* && ${TUIOS_SERVER-} == __DAEMON_SERVER__ && -n ${TUIOS_PANE_ID-} && -n ${TUIOS_SESSION-} ]] || return 0
 (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )) || return 0
 [[ -z ${_GMTM_OSC133_INSTALLED-} ]] || return 0
 # Preserve an existing OSC 133 integration and append only persistence.

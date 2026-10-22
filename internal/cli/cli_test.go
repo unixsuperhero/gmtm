@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/unixsuperhero/gmtm/internal/tuios"
 	"github.com/unixsuperhero/gmtm/internal/ui/pathpicker"
 )
 
@@ -198,5 +199,33 @@ func TestExternalAbbreviation(t *testing.T) {
 	script(t, dir, "foo-deploy", "echo FOO")
 	if c, out, _ := run("/x/foo", "dep"); c != 0 || out != "FOO\n" {
 		t.Fatalf("renamed: %d %q", c, out)
+	}
+}
+
+func TestDefaultDaemonSelection(t *testing.T) {
+	old := RunTUI
+	defer func() { RunTUI = old }()
+	var got Options
+	RunTUI = func(o Options) error { got = o; return nil }
+	t.Setenv("TUIOS_SERVER", "other")
+	t.Setenv("TUIOS_SOCKET", "/wrong/socket")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	for _, flag := range []string{"-d", "--default"} {
+		if code, _, stderr := run("mtm", flag); code != 0 || got.Server != tuios.DefaultDaemon {
+			t.Fatalf("%s: code=%d options=%+v error=%s", flag, code, got, stderr)
+		}
+		if code, _, _ := run("mtm", flag, "--server", "other"); code == 0 {
+			t.Fatalf("%s accepted conflicting selection", flag)
+		}
+	}
+	want := filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "tuios", "tuios.sock")
+	if got := SocketPath(tuios.DefaultDaemon); got != want {
+		t.Fatalf("default socket %q, want %q", got, want)
+	}
+	if SocketPath("default") == want {
+		t.Fatal("named server default collided with unnamed daemon")
+	}
+	if code, _, _ := run("mtm"); code != 0 || got.Server != DefaultServer {
+		t.Fatalf("implicit server changed: %+v", got)
 	}
 }

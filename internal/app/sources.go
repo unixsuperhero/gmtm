@@ -31,6 +31,8 @@ type ctxSource struct {
 	outNote string
 	items   []domain.ContextItem
 	names   []string
+	ctxNote string
+	initial *twopane.Level
 }
 
 type (
@@ -55,7 +57,12 @@ func (s *ctxSource) origin() string {
 	return fmt.Sprintf("%s · %s · %s · %s (%s)", t.Server, hostOf(t.Host), t.Session, t.WindowID, windowName(*s.win))
 }
 
-func (s *ctxSource) Root() twopane.Level { return s.level(s.mode) }
+func (s *ctxSource) Root() twopane.Level {
+	if s.initial != nil {
+		return *s.initial
+	}
+	return s.level(s.mode)
+}
 
 func (s *ctxSource) level(mode string) twopane.Level {
 	switch mode {
@@ -69,9 +76,12 @@ func (s *ctxSource) level(mode string) twopane.Level {
 		return lv
 	case "context":
 		lv := twopane.Level{Title: "Context", Origin: s.origin(), Empty: "no saved context for " + orNone(s.project)}
+		if s.ctxNote != "" {
+			lv.Origin += "\n" + s.ctxNote
+		}
 		for _, it := range s.items {
 			if it.Project == s.project {
-				lv.Items = append(lv.Items, twopane.Item{ID: fmt.Sprintf("item-%d", it.ID), Title: itemTitle(it), Kind: it.Kind, Data: itemRef{it}})
+				lv.Items = append(lv.Items, savedContextItem(it))
 			}
 		}
 		files := twopane.Item{ID: "files", Title: "Files in working directory", Kind: "files", Nested: true}
@@ -101,6 +111,19 @@ func itemTitle(it domain.ContextItem) string {
 	return fmt.Sprintf("%s #%d", it.Kind, it.ID)
 }
 
+func savedContextItem(it domain.ContextItem) twopane.Item {
+	item := twopane.Item{ID: fmt.Sprintf("item-%d", it.ID), Title: itemTitle(it), Kind: it.Kind, SearchText: it.Path + " " + it.Body, Data: itemRef{it}}
+	if it.Kind == "dir" && it.Path != "" && localContextPath(it) {
+		item.Nested = true
+		item.Data = filesRef{it.Path}
+	}
+	return item
+}
+
+func localContextPath(it domain.ContextItem) bool {
+	return filepath.IsAbs(it.Path) && (it.Source == nil || hostOf(it.Source.Host) == domain.HostLocal)
+}
+
 func (s *ctxSource) Children(ctx context.Context, it twopane.Item) (twopane.Level, error) {
 	switch d := it.Data.(type) {
 	case modeRef:
@@ -115,7 +138,7 @@ func (s *ctxSource) Children(ctx context.Context, it twopane.Item) (twopane.Leve
 		lv := twopane.Level{Title: orNone(d.name), Empty: "no saved context for " + orNone(d.name)}
 		for _, x := range s.items {
 			if x.Project == d.name {
-				lv.Items = append(lv.Items, twopane.Item{ID: fmt.Sprintf("item-%d", x.ID), Title: itemTitle(x), Kind: x.Kind, Data: itemRef{x}})
+				lv.Items = append(lv.Items, savedContextItem(x))
 			}
 		}
 		return lv, nil
@@ -188,7 +211,21 @@ func (s *ctxSource) Preview(_ context.Context, it twopane.Item) (string, error) 
 		}
 		return d, nil
 	case itemRef:
-		return itemText(d.it), nil
+		text := itemText(d.it)
+		if d.it.Path == "" || (d.it.Kind != "file" && d.it.Kind != "doc" && d.it.Kind != "dir") {
+			return text, nil
+		}
+		if !localContextPath(d.it) {
+			return text + "\n\nPreview unavailable: remote or unresolved paths are not read on the local filesystem.", nil
+		}
+		if d.it.Kind == "dir" {
+			return text + "\n\nEnter to browse this directory.", nil
+		}
+		body, err := readHead(d.it.Path)
+		if err != nil {
+			return text + "\n\nPreview unavailable: " + err.Error(), nil
+		}
+		return text + "\n\n" + body, nil
 	case fileRef:
 		return readHead(d.path)
 	case filesRef:
@@ -219,6 +256,13 @@ func itemText(it domain.ContextItem) string {
 }
 
 func readHead(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("preview requires a regular file")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -241,14 +285,29 @@ func (a *App) openTwopane(mode string) tea.Cmd {
 		cp := *w
 		src.win, src.project = &cp, w.Project
 	}
-	repo, history := a.d.Capture, a.d.History
+	d, windows := a.d, a.contextWindows()
+	if src.win != nil {
+		windows = []domain.Window{*src.win}
+	}
 	return func() tea.Msg {
+		if mode != "jump" {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			result, turns := collectContext(ctx, d, windows, src.items)
+			src.items, src.ctxNote = result.items, result.note
+			src.outline = capturedOutline(turns)
+			return twopaneMsg{mode, src}
+		}
 		if src.win == nil {
 			return twopaneMsg{mode, src}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		turns, note := loadCapturedTurns(ctx, repo, history, *src.win)
+		history := d.History
+		if src.win.Target.Server != d.Client.Server() || hostOf(src.win.Target.Host) != domain.HostLocal {
+			history = nil
+		}
+		turns, note := loadCapturedTurns(ctx, d.Capture, history, *src.win)
 		src.outline = capturedOutline(turns)
 		src.outNote = note
 		return twopaneMsg{mode, src}
@@ -256,6 +315,13 @@ func (a *App) openTwopane(mode string) tea.Cmd {
 }
 
 func (a *App) onTwopane(m twopaneMsg) tea.Cmd {
+	if m.mode != "jump" {
+		a.data.Items = m.src.items
+		a.refreshPages()
+		if m.src.ctxNote != "" {
+			a.status = m.src.ctxNote
+		}
+	}
 	w, h := a.modalSize()
 	tp := twopane.New(m.src, w, h)
 	a.twoSrc = m.src

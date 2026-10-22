@@ -11,6 +11,16 @@ Verified by probing a throwaway named server `cmtm-probe` locally.
 - Env to scrub before exec'ing `tuios` or any child: `TUIOS_SOCKET`, `TUIOS_SESSION`, `TUIOS_PANE_ID`, `TUIOS_WINDOW_ID`, `TUIOS_PANE_TOKEN`, `TUIOS_PANE_GRANTS`. Set `TUIOS_SERVER=<name>` explicitly. `TUIOS_SOCKET` names the pane's daemon; it must never be honored by mtm.
 - State dir of a named server: `<XDG_STATE_HOME>/tuios-servers/<name>/tuios/...` (macOS `~/.local/state/tuios-servers/<name>`).
 
+## Explicit default daemon
+
+`mtm -d` (also `--default`) selects the unnamed daemon at `<socketbase>/tuios.sock`.
+Internally its identity is `@default`, which cannot collide with a valid named
+server. Native TUIOS commands receive `--server ""` and empty `TUIOS_SERVER`;
+inherited pane/socket identity is still scrubbed. This is explicit selection,
+never fallback after a named daemon fails. Capture integrations retain `@default`
+for attribution but match empty/unset `TUIOS_SERVER` inside default-daemon panes.
+
+
 ## Wire protocol (unix socket, newline-delimited JSON)
 
 Request: `{"id":1,"verb":"list-windows","params":{"session":"work"}}`
@@ -28,9 +38,9 @@ Key verbs (see `tuios list-verbs <verb>` for full params): list-sessions, sessio
 
 `start-agent.env` is an override map on top of the daemon's environment, not a
 replacement environment; TUIOS accepts at most 64 entries. mtm forwards only
-`PATH` (so executable lookup matches the launcher) and `TUIOS_SERVER` (the selected
-server). Other variables, including credentials, are inherited from the daemon,
-not copied from the launching mtm process.
+`PATH` so executable lookup matches the launcher. TUIOS supplies `TUIOS_SERVER`
+and pane identity itself; mtm never sends those as agent launch overrides.
+Other variables, including credentials, are inherited from the daemon.
 
 ## stream-pane frames
 After the JSON reply line the connection carries binary frames: 1 type byte + u32 BE length + payload.

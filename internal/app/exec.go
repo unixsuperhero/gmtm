@@ -145,8 +145,7 @@ func (a *App) exec(id, targetID string) tea.Cmd {
 		if !hasRow || r.item == nil {
 			return nil
 		}
-		a.content = &contentView{title: r.item.Title, text: itemText(*r.item)}
-		return nil
+		return a.openSavedContext(*r.item)
 	case "context.reassociate":
 		if !hasRow || r.item == nil {
 			return nil
@@ -198,15 +197,24 @@ func (a *App) exec(id, targetID string) tea.Cmd {
 		}, tea.Quit)
 	case "page.next":
 		a.setPage((a.cur + 1) % len(a.pages))
+		if a.page().id == "context" {
+			return a.loadContextPage()
+		}
 		return nil
 	case "page.prev":
 		a.setPage((a.cur + len(a.pages) - 1) % len(a.pages))
+		if a.page().id == "context" {
+			return a.loadContextPage()
+		}
 		return nil
 	}
 	if strings.HasPrefix(id, "page.") {
 		for i, pg := range a.pages {
 			if "page."+pg.id == id {
 				a.setPage(i)
+				if pg.id == "context" {
+					return a.loadContextPage()
+				}
 			}
 		}
 		return nil

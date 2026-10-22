@@ -19,7 +19,7 @@ import (
 )
 
 // Harnesses recognised by mtm, in preference order.
-var Harnesses = []string{"claude", "codex", "gemini", "omp"}
+var Harnesses = []string{"omp", "claude", "codex", "gemini"}
 
 // Option is one catalog entry of a harness setting (model, effort, speed).
 // Entries are Recognized only: a catalog entry is not proof of account access.
@@ -158,13 +158,12 @@ func (s *Service) AgentCommand(spec domain.LaunchSpec) (string, error) {
 	return strings.Join(parts, " "), nil
 }
 
-// start-agent env overlays the daemon's environment and is limited to 64
-// entries. Forward only executable lookup and the explicitly selected server,
-// not the caller's full environment or its pane-specific identity.
+// start-agent env overlays the daemon's environment. Forward only executable
+// lookup; TUIOS supplies its own server and pane identity variables.
 func envMap(env []string) map[string]string {
-	m := make(map[string]string, 2)
+	m := make(map[string]string, 1)
 	for _, kv := range env {
-		if k, v, ok := strings.Cut(kv, "="); ok && (k == "PATH" || k == "TUIOS_SERVER") {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == "PATH" {
 			m[k] = v
 		}
 	}

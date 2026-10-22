@@ -15,6 +15,9 @@ var ScrubbedEnvVars = []string{
 
 // ScrubEnv returns env without ScrubbedEnvVars or TUIOS_SERVER, then appends TUIOS_SERVER=server.
 func ScrubEnv(env []string, server string) []string {
+	if server == DefaultDaemon {
+		server = ""
+	}
 	drop := map[string]bool{"TUIOS_SERVER": true}
 	for _, k := range ScrubbedEnvVars {
 		drop[k] = true
