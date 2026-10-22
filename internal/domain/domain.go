@@ -6,12 +6,12 @@ import "time"
 
 // Reserved server and session names.
 const (
-	DefaultServer      = "clean-mtm"
-	SessionNoProject   = "no-project"
-	SessionMTMOnly     = "mtm-only"
-	ProjectUnknown     = "unknown"
-	HostLocal          = "local"
-	TestServerPrefix   = "cmt-" // + 8 hex; TUIOS server names are capped at 14 chars
+	DefaultServer    = "clean-mtm"
+	SessionNoProject = "no-project"
+	SessionMTMOnly   = "mtm-only"
+	ProjectUnknown   = "unknown"
+	HostLocal        = "local"
+	TestServerPrefix = "cmt-" // + 8 hex; TUIOS server names are capped at 14 chars
 )
 
 // Target addresses one runtime object: server, host, session, stable window id.
@@ -23,7 +23,7 @@ type Target struct {
 	WindowID string `json:"windowId"`
 }
 
-func (t Target) Key() string { return t.Server + "|" + t.Host + "|" + t.Session + "|" + t.WindowID }
+func (t Target) Key() string  { return t.Server + "|" + t.Host + "|" + t.Session + "|" + t.WindowID }
 func (t Target) IsZero() bool { return t.WindowID == "" && t.Session == "" }
 
 // Kind of a managed window.
@@ -74,8 +74,8 @@ type Window struct {
 	PID          int
 	Workspace    int
 	LastActivity time.Time
-	Closed       bool // daemon reported closed
-	Unavailable  bool // source disconnected, not proven closed
+	Closed       bool   // daemon reported closed
+	Unavailable  bool   // source disconnected, not proven closed
 	Project      string // "" = no ownership; derived from session name by inventory
 	Stale        bool
 	Pinned       bool
@@ -104,11 +104,11 @@ type Host struct {
 type ConnState string
 
 const (
-	ConnConnecting     ConnState = "connecting"
-	ConnConnected      ConnState = "connected"
-	ConnDisconnected   ConnState = "disconnected"
+	ConnConnecting      ConnState = "connecting"
+	ConnConnected       ConnState = "connected"
+	ConnDisconnected    ConnState = "disconnected"
 	ConnResynchronizing ConnState = "resynchronizing"
-	ConnUnknown        ConnState = "unknown"
+	ConnUnknown         ConnState = "unknown"
 )
 
 type Connection struct {
@@ -168,19 +168,19 @@ const (
 
 // LaunchSpec is shared by quick and form creation.
 type LaunchSpec struct {
-	Kind     Kind
-	Host     string
-	Session  string // resolved from Project unless explicit
-	Project  string // "" means no-project (explicit)
-	Name     string
-	CWD      string
-	Command  []string
-	Harness  string
-	Model    string
-	Effort   string
-	Speed    string
-	Prompt   string
-	Queue    bool
+	Kind    Kind
+	Host    string
+	Session string // resolved from Project unless explicit
+	Project string // "" means no-project (explicit)
+	Name    string
+	CWD     string
+	Command []string
+	Harness string
+	Model   string
+	Effort  string
+	Speed   string
+	Prompt  string
+	Queue   bool
 }
 
 // Capability of an agent harness/model: recognized vs installed vs usable.

@@ -23,9 +23,9 @@ const (
 
 // Action is defined once and reused everywhere.
 type Action struct {
-	ID          string   // "new.terminal"
-	Verb        string   // "New"
-	Object      string   // "Terminal"
+	ID          string // "new.terminal"
+	Verb        string // "New"
+	Object      string // "Terminal"
 	Description string
 	Modes       []string // modes where the binding applies
 	Keys        []string // default key sequences, e.g. "n t", "N t", "ctrl+a"
