@@ -19,7 +19,7 @@ const (
 	Choice                  // authoritative closed enum: unmatched input is invalid
 	MultiSelect             // several values from a closed set
 	Extensible              // user-extensible: unmatched nonempty text is staged as new
-	Path                    // filesystem path (local: native picker + completion; remote: host-explicit)
+	Path                    // filesystem path (local: fuzzy picker + completion; remote: host-explicit)
 	Linked                  // closed child choice whose options carry Parent (see Field.ParentID)
 )
 

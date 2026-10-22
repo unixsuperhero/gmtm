@@ -2,10 +2,14 @@ package forms
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/unixsuperhero/gmtm/internal/ui/pathpicker"
 )
 
 func key(s string) tea.KeyMsg {
@@ -246,40 +250,61 @@ func TestStaleCompletionIgnored(t *testing.T) {
 }
 
 func TestPathPickerLocalAndRemote(t *testing.T) {
-	fp := &FakePicker{Paths: []string{"/tmp/x", "/tmp/y"}}
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	f := mustNew(t,
 		Field{ID: "files", Label: "Files", Kind: Path, Path: PathSpec{Mode: PickFile, Multiple: true}},
 		Field{ID: "rdir", Label: "Remote dir", Kind: Path, Path: PathSpec{Mode: PickDir, Host: "vps2"}},
+		Field{ID: "out", Label: "Output", Kind: Path, Path: PathSpec{Mode: PickSave}, Default: filepath.Join(dir, "missing.json")},
 	)
-	f.SetPicker(fp)
 	msgs := send(f, "ctrl+o")
-	if len(msgs) != 1 || len(fp.Requests) != 1 || !fp.Requests[0].Multiple {
-		t.Fatalf("picker not invoked: %v %+v", msgs, fp.Requests)
+	if len(msgs) != 1 {
+		t.Fatalf("no pick request: %v", msgs)
 	}
-	f.Update(msgs[0])
+	req, ok := msgs[0].(PickRequestMsg)
+	if !ok || req.FieldID != "files" || req.FormID != f.ID || !req.Multiple || req.Mode != PickFile || req.Base != home || req.Gen != f.Gen("files") {
+		t.Fatalf("request %+v", msgs[0])
+	}
+	if o := req.PickerOptions(); o.Mode != pathpicker.Files || !o.Multiple || o.Base != home || o.ID != f.ID+"/files" {
+		t.Fatalf("picker options %+v", o)
+	}
+	f.Update(req.Result([]string{"/tmp/x", "/tmp/y"}, nil))
 	s, _ := submit(t, f)
 	if strings.Join(s.Values["files"].([]string), ",") != "/tmp/x,/tmp/y" {
 		t.Fatalf("picked values %v", s.Values)
 	}
 	send(f, "j")
-	if msgs := send(f, "ctrl+o"); len(msgs) != 0 || len(fp.Requests) != 1 {
-		t.Fatal("local picker used for remote host")
+	if msgs := send(f, "ctrl+o"); len(msgs) != 0 {
+		t.Fatalf("pick request emitted for remote host: %v", msgs)
 	}
-	if !strings.Contains(f.FieldError("rdir"), "remote host") {
-		t.Fatalf("remote picker error %q", f.FieldError("rdir"))
+	if !strings.Contains(f.FieldNote("rdir"), "no local picker for remote host") {
+		t.Fatalf("remote note %q", f.FieldNote("rdir"))
+	}
+	// base is the value's directory when it exists
+	send(f, "j")
+	m := send(f, "ctrl+o")
+	if r := m[0].(PickRequestMsg); r.Base != dir || r.Mode != PickSave || r.PickerOptions().Mode != pathpicker.SaveAs {
+		t.Fatalf("save request %+v", r)
+	}
+	f.Update(m[0].(PickRequestMsg).Result([]string{filepath.Join(dir, "new.json")}, nil))
+	if f.Text("out") != filepath.Join(dir, "new.json") {
+		t.Fatalf("single pick applied %q", f.Text("out"))
 	}
 	// stale picker result is ignored after an edit
-	send(f, "k")
-	m := send(f, "ctrl+o")
+	send(f, "k", "k")
+	m = send(f, "ctrl+o")
 	send(f, "i", "z")
-	f.Update(m[0])
+	f.Update(m[0].(PickRequestMsg).Result([]string{"/stale"}, nil))
 	if f.Text("files") != "z" {
 		t.Fatalf("stale picker applied: %q", f.Text("files"))
 	}
-	fp.Err = ErrPickerCanceled
 	m = send(f, "ctrl+o")
-	f.Update(m[0])
-	if !strings.Contains(f.FieldNote("files"), "cancelled") {
+	f.Update(m[0].(PickRequestMsg).Result(nil, ErrPickerCanceled))
+	if !strings.Contains(f.FieldNote("files"), "cancelled") || f.Text("files") != "z" {
 		t.Fatal("cancel not reported")
 	}
 }

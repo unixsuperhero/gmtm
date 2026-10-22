@@ -3,7 +3,6 @@
 package cli
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,11 +14,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/unixsuperhero/gmtm/internal/actions"
 	"github.com/unixsuperhero/gmtm/internal/ui/jsonexplorer"
+	"github.com/unixsuperhero/gmtm/internal/ui/pathpicker"
 )
 
 // Version is overridden at link time.
@@ -30,8 +31,9 @@ const DefaultServer = "clean-mtm"
 
 // Options are the resolved global options handed to the TUI.
 type Options struct {
-	Server string
-	DB     string
+	Server  string
+	DB      string
+	Project string // initial active project ("" = no-project)
 }
 
 // Hooks set by the orchestrator / tests.
@@ -42,8 +44,8 @@ var (
 	Actions func() *actions.Registry = actions.New
 	// runExplorer is the JSON explorer runner.
 	runExplorer = jsonexplorer.Run
-	// pickFile asks the OS for a file; swapped in tests.
-	pickFile = nativePick
+	// pickFile runs the built-in fuzzy path picker; swapped in tests.
+	pickFile = fuzzyPick
 	// isTTY reports whether a reader is an interactive terminal.
 	isTTY = func(r io.Reader) bool {
 		f, ok := r.(*os.File)
@@ -73,8 +75,8 @@ func ScrubbedEnv(env []string, server string) []string {
 }
 
 type global struct {
-	server, db string
-	json       bool
+	server, db, project string
+	json                bool
 }
 
 // Main is the process entry.
@@ -89,6 +91,7 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&g.server, "server", DefaultServer, "")
 	fs.StringVar(&g.db, "db", "", "")
+	fs.StringVar(&g.project, "project", "", "")
 	fs.BoolVar(&g.json, "json", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -171,7 +174,7 @@ func (e *runEnv) tui(rest []string) int {
 		fmt.Fprintln(e.err, "TUI not wired")
 		return 1
 	}
-	if err := RunTUI(Options{Server: e.g.server, DB: e.g.db}); err != nil {
+	if err := RunTUI(Options{Server: e.g.server, DB: e.g.db, Project: e.g.project}); err != nil {
 		fmt.Fprintf(e.err, "%s: %v\n", e.bin, err)
 		return 1
 	}
@@ -303,7 +306,10 @@ func (e *runEnv) jsonCmd(rest []string) int {
 		data, err = io.ReadAll(e.in)
 	default:
 		var p string
-		p, err = pickFile()
+		if p, err = pickFile(); errors.Is(err, pathpicker.ErrCanceled) {
+			fmt.Fprintf(e.err, "%s: json: no file chosen (pass FILE or pipe JSON on stdin)\n", e.bin)
+			return 1
+		}
 		if err == nil {
 			title = p
 			data, err = os.ReadFile(p)
@@ -322,33 +328,25 @@ func (e *runEnv) jsonCmd(rest []string) int {
 	return 0
 }
 
-func nativePick() (string, error) {
-	var c *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		c = exec.Command("osascript", "-e", "POSIX path of (choose file)")
-	default:
-		c = exec.Command("zenity", "--file-selection")
+// fuzzyPick asks for one local file with the built-in fuzzy path picker.
+func fuzzyPick() (string, error) {
+	paths, err := pathpicker.Run(pathpicker.Options{Mode: pathpicker.Files, Title: "json: choose a file"})
+	if err != nil {
+		return "", err
 	}
-	var out bytes.Buffer
-	c.Stdout = &out
-	if err := c.Run(); err != nil {
-		return "", fmt.Errorf("no file chosen (pass a FILE or pipe JSON on stdin): %w", err)
-	}
-	p := strings.TrimSpace(out.String())
-	if p == "" {
-		return "", errors.New("no file chosen")
-	}
-	return p, nil
+	return paths[0], nil
 }
 
 func (e *runEnv) external(sub string, rest []string) int {
 	if strings.ContainsAny(sub, "/\\") || strings.HasPrefix(sub, "-") {
 		return fail(e.err, e.bin, "unknown command %q (try '%s help')", sub, e.bin)
 	}
-	path, err := exec.LookPath(e.bin + "-" + sub)
-	if err != nil {
-		return fail(e.err, e.bin, "unknown command %q (no built-in, and no %s-%s on PATH; try '%s help')", sub, e.bin, sub, e.bin)
+	path, cands := resolveExternal(e.bin, sub, os.Getenv("PATH"))
+	switch {
+	case len(cands) > 1:
+		return fail(e.err, e.bin, "ambiguous command %q: matches %s (type more of the name)", sub, strings.Join(cands, ", "))
+	case path == "":
+		return fail(e.err, e.bin, "unknown command %q (no built-in, and no %s-%s* on PATH; try '%s help')", sub, e.bin, sub, e.bin)
 	}
 	c := exec.Command(path, rest...)
 	c.Stdin, c.Stdout, c.Stderr = e.in, e.out, e.err
@@ -361,4 +359,53 @@ func (e *runEnv) external(sub string, rest []string) int {
 		return fail(e.err, e.bin, "%s: %v", filepath.Base(path), err)
 	}
 	return 0
+}
+
+// resolveExternal finds the executable for `bin sub`: an exact <bin>-<sub>
+// on PATH wins (first PATH entry first); otherwise a unique <bin>-<sub>*
+// prefix match. With several prefix matches it returns their sorted names
+// and no path. Built-in names are never abbreviated (Main checks them first).
+func resolveExternal(bin, sub, pathEnv string) (path string, ambiguous []string) {
+	exact := bin + "-" + sub
+	byName := map[string]string{}
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if dir == "" {
+			dir = "."
+		}
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, ent := range ents {
+			n := ent.Name()
+			if !strings.HasPrefix(n, exact) {
+				continue
+			}
+			if _, seen := byName[n]; seen {
+				continue
+			}
+			full := filepath.Join(dir, n)
+			if st, err := os.Stat(full); err != nil || st.IsDir() || st.Mode()&0o111 == 0 {
+				continue
+			}
+			byName[n] = full
+		}
+	}
+	if p, ok := byName[exact]; ok {
+		return p, nil
+	}
+	if len(byName) == 1 {
+		for _, p := range byName {
+			return p, nil
+		}
+	}
+	names := make([]string, 0, len(byName))
+	for n := range byName {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	if len(names) < 2 {
+		names = nil
+	}
+	return "", names
 }

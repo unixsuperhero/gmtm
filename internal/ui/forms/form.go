@@ -1,6 +1,6 @@
 // Package forms is mtm's single form interaction system: field kinds,
 // normal/insert modality, navigation, suggestions, staging of user-extensible
-// values, linked parent/child fields, native path pickers and async
+// values, linked parent/child fields, fuzzy path picker requests and async
 // completions bound to field IDs and edit generations.
 package forms
 
@@ -45,7 +45,8 @@ type CompletionMsg struct {
 	Err     error
 }
 
-// PickResultMsg carries native picker output, bound like CompletionMsg.
+// PickResultMsg carries fuzzy path picker output for a PickRequestMsg,
+// bound like CompletionMsg: a stale Gen is ignored.
 type PickResultMsg struct {
 	FormID  string
 	FieldID string
@@ -110,10 +111,9 @@ func (s *fieldState) setText(t string) {
 }
 
 // Form is the form model. Update returns commands that emit SubmitMsg,
-// CancelMsg, CompletionMsg and PickResultMsg.
+// CancelMsg, CompletionMsg and PickRequestMsg.
 type Form struct {
 	ID, Title       string
-	PickTimeout     time.Duration
 	CompleteTimeout time.Duration
 	Width           int
 
@@ -124,7 +124,6 @@ type Form struct {
 	finding bool
 	finder  textinput.Model
 	findHL  int
-	picker  Picker
 	initial string
 	status  string
 }
@@ -134,8 +133,8 @@ const reservedKeys = "jkhliagGx/ 0123456789"
 // New builds a form. It rejects duplicate IDs, unknown parents and shortcuts
 // that collide with navigation keys or each other.
 func New(id, title string, fields ...Field) (*Form, error) {
-	f := &Form{ID: id, Title: title, byID: map[string]*fieldState{}, picker: NewOSPicker(),
-		PickTimeout: 10 * time.Minute, CompleteTimeout: 5 * time.Second}
+	f := &Form{ID: id, Title: title, byID: map[string]*fieldState{},
+		CompleteTimeout: 5 * time.Second}
 	short := map[rune]string{}
 	for _, fd := range fields {
 		if fd.ID == "" || f.byID[fd.ID] != nil {
@@ -204,9 +203,6 @@ func (f *Form) applyDefault(s *fieldState) {
 	}
 	s.fromDefault = true
 }
-
-// SetPicker replaces the native picker (tests use *FakePicker).
-func (f *Form) SetPicker(p Picker) { f.picker = p }
 
 // SetOptions refreshes one field's static options without touching others.
 func (f *Form) SetOptions(fieldID string, opts []Option) {
@@ -488,7 +484,7 @@ func (f *Form) Update(msg tea.Msg) tea.Cmd {
 		case len(m.Paths) > 0:
 			s.setText(m.Paths[0])
 			f.touched(s)
-			s.note = "picked with native picker"
+			s.note = "picked with fuzzy picker"
 		}
 	case tea.KeyMsg:
 		return f.key(m)
@@ -774,21 +770,16 @@ func (f *Form) pick(s *fieldState) tea.Cmd {
 		return nil
 	}
 	if !s.f.Path.Local() {
-		s.err = fmt.Sprintf("native picker unavailable: path is on remote host %q; type the remote path", s.f.Path.Host)
+		s.note = fmt.Sprintf("no local picker for remote host %q; type the path as it exists on %s", s.f.Path.Host, s.f.Path.Host)
 		return nil
 	}
-	if f.picker == nil {
-		s.err = ErrPickerUnavailable.Error()
-		return nil
+	v := s.text()
+	if v == "" && len(s.items) > 0 {
+		v = s.items[len(s.items)-1]
 	}
-	p, req, gen, id, fid, tmo := f.picker, PickRequest{Mode: s.f.Path.Mode, Multiple: s.f.Path.Multiple, Title: s.f.Label, Start: s.text()}, s.gen, s.f.ID, f.ID, f.PickTimeout
-	s.note = "native " + s.f.Path.Mode.String() + " picker open…"
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), tmo)
-		defer cancel()
-		paths, err := p.Pick(ctx, req)
-		return PickResultMsg{FormID: fid, FieldID: id, Gen: gen, Paths: paths, Err: err}
-	}
+	s.note = "fuzzy " + s.f.Path.Mode.String() + " picker open…"
+	return emit(PickRequestMsg{FormID: f.ID, FieldID: s.f.ID, Gen: s.gen, Mode: s.f.Path.Mode,
+		Multiple: s.f.Path.Multiple, Base: pickBase(v), Title: s.f.Label})
 }
 
 func (f *Form) setFocus(i int) {
@@ -1040,9 +1031,9 @@ func (f *Form) details(b *strings.Builder, s *fieldState, focused bool) {
 	}
 	if s.f.Kind == Path {
 		if s.f.Path.Local() {
-			sub("host: local — ctrl+o opens native " + s.f.Path.Mode.String() + " picker; typing completes")
+			sub("host: local — ctrl+o opens the fuzzy " + s.f.Path.Mode.String() + " picker; typing completes")
 		} else {
-			sub(fmt.Sprintf("host: %s (remote) — local picker unavailable; enter a path on %s", s.f.Path.Host, s.f.Path.Host))
+			sub(fmt.Sprintf("host: %s (remote) — no local picker for remote host; enter a path on %s", s.f.Path.Host, s.f.Path.Host))
 		}
 	}
 	if s.f.Kind == MultiSelect && !f.insert {
